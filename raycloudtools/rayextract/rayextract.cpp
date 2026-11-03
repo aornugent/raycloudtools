@@ -65,6 +65,7 @@ void usage(int exit_code = 1)
     std::cout << "                            --use_rays           - (-u) use rays to reduce trunk radius overestimation in noisy cloud data" << std::endl;
     std::cout << "                            --segmented          - (-l) the cloud is already segmented into trees, one per colour (as in _segmented.ply). Only the tree models are estimated, black points are unlabelled" << std::endl;
     std::cout << "                            --labels_only        - (-q) instead of _segmented.ply, write _labels.bin: one int32 tree id per ray of the saved cloud (-1 = none), in its order" << std::endl;
+    std::cout << "                            --no_mesh            - (-k) don't write _trees_mesh.ply" << std::endl;
     std::cout << "                            (for internal constants -c -g -s see source file rayextract)" << std::endl;
     std::cout << "   note: branch radii rely on priors (Leonardo's rule at splits, self-similar taper) that can bias branch" << std::endl;
     std::cout << "         measurements. Only use these results if the mechanism and its implications are understood." << std::endl;
@@ -105,6 +106,7 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalFlagArgument exclude_rays("exclude_rays", 'e'), segment_branches("branch_segmentation", 'b'), stalks("stalks", 's'), use_rays("use_rays", 'u');
   ray::OptionalFlagArgument segmented("segmented", 'l');
   ray::OptionalFlagArgument labels_only("labels_only", 'q');
+  ray::OptionalFlagArgument no_mesh("no_mesh", 'k');
   ray::DoubleArgument width(0.01, 10.0, 0.25), drop(0.001, 1.0), max_gradient(0.01, 5.0), min_gradient(0.01, 5.0);
 
   ray::DoubleArgument max_diameter(0.01, 100.0), distance_limit(0.01, 10.0), height_min(0.01, 1000.0),
@@ -146,7 +148,7 @@ int rayExtract(int argc, char *argv[])
     { &max_diameter_option, &distance_limit_option, &height_min_option, &crop_length_option, &girth_height_ratio_option,
       &cylinder_length_to_width_option, &gap_ratio_option, &span_ratio_option, &gravity_factor_option,
       &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &use_rays, &segmented,
-      &labels_only, &verbose, &view_flag });
+      &labels_only, &no_mesh, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
   if (!extract_trunks && !extract_forest && !extract_terrain && !extract_trees && !extract_leaves)
@@ -286,18 +288,21 @@ int rayExtract(int argc, char *argv[])
     {
       cloud.save(cloud_file.nameStub() + "_segmented.ply");
     }
-    // let's also save the trees out as a mesh
-    // it is a bit inefficient to load from file just to convert it into the forest structure, but
-    // it works OK for now. Better would be for ray::Trees so store the result as a ray::ForestStructure
-    ray::ForestStructure forest;
-    if (!forest.load(cloud_file.nameStub() + "_trees.txt"))
+    if (!no_mesh.isSet())
     {
-      usage();
-    }
-    ray::Mesh tree_mesh;
-    forest.generateSmoothMesh(tree_mesh, -1, 1, 1, 1);
-    output_file = cloud_file.nameStub() + "_trees_mesh.ply";
-    ray::writePlyMesh(output_file, tree_mesh, true);    
+      // let's also save the trees out as a mesh
+      // it is a bit inefficient to load from file just to convert it into the forest structure, but
+      // it works OK for now. Better would be for ray::Trees so store the result as a ray::ForestStructure
+      ray::ForestStructure forest;
+      if (!forest.load(cloud_file.nameStub() + "_trees.txt"))
+      {
+        usage();
+      }
+      ray::Mesh tree_mesh;
+      forest.generateSmoothMesh(tree_mesh, -1, 1, 1, 1);
+      output_file = cloud_file.nameStub() + "_trees_mesh.ply";
+      ray::writePlyMesh(output_file, tree_mesh, true);
+    }    
     std::cout << "note: branch radii rely on priors (Leonardo's rule at splits, self-similar taper) that can bias branch" << std::endl;
     std::cout << "      measurements. Only use these results if the mechanism and its implications are understood." << std::endl;
   }
