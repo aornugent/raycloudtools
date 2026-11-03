@@ -58,12 +58,21 @@ void connectPointsShortestPath(
     points_p.col(i) = points[i].pos;
   }
   Nabo::NNSearchD *nns = Nabo::NNSearchD::createKDTreeLinearHeap(points_p, 3);
-  // Run the search
+  // Run the search in chunks, keeping only the indices: a full search_size x N matrix of squared
+  // distances is the largest allocation of the run (8 bytes per neighbour per point), and each
+  // distance is cheap to recompute from the two positions where it is used.
   Eigen::MatrixXi indices;
-  Eigen::MatrixXd dists2;
   indices.resize(search_size, points.size());
-  dists2.resize(search_size, points.size());
-  nns->knn(points_p, indices, dists2, search_size, kNearestNeighbourEpsilon, 0, distance_limit);
+  const Eigen::Index chunk = 1 << 20;
+  for (Eigen::Index start = 0; start < static_cast<Eigen::Index>(points.size()); start += chunk)
+  {
+    const Eigen::Index n = std::min(chunk, static_cast<Eigen::Index>(points.size()) - start);
+    const Eigen::MatrixXd query = points_p.middleCols(start, n);
+    Eigen::MatrixXi chunk_indices(search_size, n);
+    Eigen::MatrixXd chunk_dists2(search_size, n);
+    nns->knn(query, chunk_indices, chunk_dists2, search_size, kNearestNeighbourEpsilon, 0, distance_limit);
+    indices.middleCols(start, n) = chunk_indices;
+  }
 
   // 2. climb up from lowest points, this part is based on Djikstra's algorithm
   while (!closest_node.empty())
@@ -86,7 +95,7 @@ void connectPointsShortestPath(
             continue;
           }
         }
-        const double dist2 = dists2(i, node.id);  // square distance to neighbour
+        const double dist2 = (points[child].pos - points[node.id].pos).squaredNorm();  // square distance to neighbour
         const double dist = std::sqrt(dist2);
         double new_score = 0;
         const Eigen::Vector3d dif = (points[child].pos - points[node.id].pos).normalized();
