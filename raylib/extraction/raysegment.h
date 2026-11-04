@@ -45,10 +45,14 @@ struct RAYLIB_EXPORT Vertex
 /// @c point_labels optional tree label per ray in @c cloud. When supplied, one tree is
 /// generated per distinct label, rather than segmenting the trees from the point distribution. Negative
 /// labels mean unlabelled, these points are attached to whichever labelled tree reaches them
+/// @c graph_cache optional file for the shortest-path graph (each point's parent, root and distance to ground):
+/// loaded when it exists and matches the point count, otherwise computed and saved there. It is only valid for the
+/// same cloud, mesh, labels, @c max_diameter, @c distance_limit and @c gravity_factor, which the caller must key.
 std::vector<std::vector<int>> RAYLIB_EXPORT getRootsAndSegment(std::vector<Vertex> &points, const Cloud &cloud, const Mesh &mesh,
                                                                double max_diameter, double distance_limit, double height_min,
                                                                double gravity_factor,
-                                                               const std::vector<int> *point_labels = nullptr);
+                                                               const std::vector<int> *point_labels = nullptr,
+                                                               const std::string &graph_cache = std::string());
 
 }  // namespace ray
 #endif  // RAYLIB_RAYSEGMENT_H

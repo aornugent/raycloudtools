@@ -6,6 +6,11 @@
 #include "raysegment.h"
 #include <nabo/nabo.h>
 #include "rayterrain.h"
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <queue>
@@ -157,9 +162,101 @@ void connectPointsShortestPath(
 
 /// Converts a ray cloud to a set of points @c points connected by the shortest path to the ground @c mesh
 /// the returned vector of index sets provides the root points for each separated tree
+namespace
+{
+const char kGraphMagic[8] = { 'R', 'C', 'T', 'G', 'R', 'P', 'H', '1' };
+
+/// Save the result of connectPointsShortestPath: parent, root and distance to ground per point, plus the path
+/// labels when the cloud was pre-labelled. Written to a temporary file and renamed, so a reader never sees half.
+void saveGraph(const std::string &path, const std::vector<Vertex> &points, const std::vector<int> *path_labels)
+{
+  const std::string tmp = path + ".partial";
+  {
+    std::ofstream out(tmp, std::ios::binary);
+    const uint64_t n = points.size();
+    const uint8_t has_labels = path_labels ? 1 : 0;
+    out.write(kGraphMagic, sizeof(kGraphMagic));
+    out.write(reinterpret_cast<const char *>(&n), sizeof(n));
+    out.write(reinterpret_cast<const char *>(&has_labels), sizeof(has_labels));
+    for (const auto &p : points)
+    {
+      const int32_t parent = p.parent, root = p.root;
+      out.write(reinterpret_cast<const char *>(&parent), sizeof(parent));
+      out.write(reinterpret_cast<const char *>(&root), sizeof(root));
+      out.write(reinterpret_cast<const char *>(&p.distance_to_ground), sizeof(double));
+    }
+    if (path_labels)
+    {
+      for (const int label : *path_labels)
+      {
+        const int32_t l = label;
+        out.write(reinterpret_cast<const char *>(&l), sizeof(l));
+      }
+    }
+    if (!out)
+    {
+      std::cerr << "Warning: could not write the graph cache " << path << std::endl;
+      return;
+    }
+  }
+  std::rename(tmp.c_str(), path.c_str());
+}
+
+/// Load a graph saved by saveGraph into @c points. Returns false (leaving @c points untouched) when the file is
+/// missing or doesn't match these points, so the caller computes the graph instead.
+bool loadGraph(const std::string &path, std::vector<Vertex> &points, std::vector<int> *path_labels)
+{
+  std::ifstream in(path, std::ios::binary);
+  if (!in)
+  {
+    return false;
+  }
+  char magic[sizeof(kGraphMagic)];
+  uint64_t n = 0;
+  uint8_t has_labels = 0;
+  in.read(magic, sizeof(magic));
+  in.read(reinterpret_cast<char *>(&n), sizeof(n));
+  in.read(reinterpret_cast<char *>(&has_labels), sizeof(has_labels));
+  if (!in || !std::equal(magic, magic + sizeof(magic), kGraphMagic) || n != points.size() ||
+      has_labels != (path_labels ? 1 : 0))
+  {
+    std::cerr << "Warning: graph cache " << path << " does not match this cloud, recomputing" << std::endl;
+    return false;
+  }
+  std::vector<char> buf(n * 16);
+  in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+  std::vector<int32_t> labels(path_labels ? n : 0);
+  if (path_labels)
+  {
+    in.read(reinterpret_cast<char *>(labels.data()), static_cast<std::streamsize>(n * sizeof(int32_t)));
+  }
+  if (!in)
+  {
+    std::cerr << "Warning: graph cache " << path << " is truncated, recomputing" << std::endl;
+    return false;
+  }
+  for (size_t i = 0; i < n; i++)
+  {
+    int32_t parent, root;
+    std::memcpy(&parent, &buf[i * 16], 4);
+    std::memcpy(&root, &buf[i * 16 + 4], 4);
+    std::memcpy(&points[i].distance_to_ground, &buf[i * 16 + 8], 8);
+    points[i].parent = parent;
+    points[i].root = root;
+    points[i].visited = root != -1;
+  }
+  if (path_labels)
+  {
+    path_labels->assign(labels.begin(), labels.end());
+  }
+  return true;
+}
+}  // namespace
+
 std::vector<std::vector<int>> getRootsAndSegment(std::vector<Vertex> &points, const Cloud &cloud, const Mesh &mesh,
                                                  double max_diameter, double distance_limit, double height_min,
-                                                 double gravity_factor, const std::vector<int> *point_labels)
+                                                 double gravity_factor, const std::vector<int> *point_labels,
+                                                 const std::string &graph_cache)
 {
   if (point_labels && point_labels->size() != cloud.ends.size())
   {
@@ -265,8 +362,20 @@ std::vector<std::vector<int>> getRootsAndSegment(std::vector<Vertex> &points, co
   }
 
   // perform Djikstra's shortest path to ground algorithm to fill in the parent indices in 'points'
-  connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor,
-                            point_labels ? &path_labels : nullptr);
+  // (or load its result from the graph cache, which is most of the run time)
+  std::vector<int> *labels_out = point_labels ? &path_labels : nullptr;
+  if (!graph_cache.empty() && loadGraph(graph_cache, points, labels_out))
+  {
+    std::cout << "loaded the shortest-path graph from " << graph_cache << std::endl;
+  }
+  else
+  {
+    connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, labels_out);
+    if (!graph_cache.empty())
+    {
+      saveGraph(graph_cache, points, labels_out);
+    }
+  }
 
   // when labels have been supplied we don't need to segment the trees, we just group the root points
   // according to the label of the points that grow from them, generating one tree per label

@@ -37,7 +37,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
 
   std::vector<std::vector<int>> roots_list =
     getRootsAndSegment(points_, cloud, mesh, params_->max_diameter, params_->distance_limit, params_->height_min,
-                       params_->gravity_factor, point_labels_);
+                       params_->gravity_factor, point_labels_, params_->graph_cache);
 
   // Now we want to convert these paths into a set of branch sections, from root to tips
   // splitting as we go up...

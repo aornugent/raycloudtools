@@ -66,6 +66,7 @@ void usage(int exit_code = 1)
     std::cout << "                            --segmented          - (-l) the cloud is already segmented into trees, one per colour (as in _segmented.ply). Only the tree models are estimated, black points are unlabelled" << std::endl;
     std::cout << "                            --labels_only        - (-q) instead of _segmented.ply, write _labels.bin: one int32 tree id per ray of the saved cloud (-1 = none), in its order" << std::endl;
     std::cout << "                            --no_mesh            - (-k) don't write _trees_mesh.ply" << std::endl;
+    std::cout << "                            --graph_cache file   - (-r) load the shortest-path graph (most of the run time) from file, or compute and save it there. Only valid for the same cloud, mesh, labels, max_diameter, distance_limit and gravity_factor" << std::endl;
     std::cout << "                            (for internal constants -c -g -s see source file rayextract)" << std::endl;
     std::cout << "   note: branch radii rely on priors (Leonardo's rule at splits, self-similar taper) that can bias branch" << std::endl;
     std::cout << "         measurements. Only use these results if the mechanism and its implications are understood." << std::endl;
@@ -107,6 +108,8 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalFlagArgument segmented("segmented", 'l');
   ray::OptionalFlagArgument labels_only("labels_only", 'q');
   ray::OptionalFlagArgument no_mesh("no_mesh", 'k');
+  ray::FileArgument graph_cache_file(false);
+  ray::OptionalKeyValueArgument graph_cache_option("graph_cache", 'r', &graph_cache_file);
   ray::DoubleArgument width(0.01, 10.0, 0.25), drop(0.001, 1.0), max_gradient(0.01, 5.0), min_gradient(0.01, 5.0);
 
   ray::DoubleArgument max_diameter(0.01, 100.0), distance_limit(0.01, 10.0), height_min(0.01, 1000.0),
@@ -148,7 +151,7 @@ int rayExtract(int argc, char *argv[])
     { &max_diameter_option, &distance_limit_option, &height_min_option, &crop_length_option, &girth_height_ratio_option,
       &cylinder_length_to_width_option, &gap_ratio_option, &span_ratio_option, &gravity_factor_option,
       &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &use_rays, &segmented,
-      &labels_only, &no_mesh, &verbose, &view_flag });
+      &labels_only, &no_mesh, &graph_cache_option, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
   if (!extract_trunks && !extract_forest && !extract_terrain && !extract_trees && !extract_leaves)
@@ -238,7 +241,11 @@ int rayExtract(int argc, char *argv[])
     {
       params.global_taper_factor = global_taper_factor.value();
     }   
-    params.use_rays = use_rays.isSet(); 
+    params.use_rays = use_rays.isSet();
+    if (graph_cache_option.isSet())
+    {
+      params.graph_cache = graph_cache_file.name();
+    } 
     params.segment_branches = segment_branches.isSet();
 
     // for a pre-segmented cloud we take the tree label of each point from its colour, so the tree
