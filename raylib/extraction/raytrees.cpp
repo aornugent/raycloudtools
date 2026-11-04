@@ -30,6 +30,9 @@ TreesParams::TreesParams()
   , radius_floor(0.01)
   , branch_vote_sd(1.0)
   , stem_taper(0.0)
+  , trunk_gap(0.0)
+  , trunk_span_ratio(0.0)
+  , trunk_splits(2)
 {}
 
 /// The main reconstruction algorithm
@@ -156,12 +159,15 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     sections_[sec_].ends = best_ends;
     nodes = best_nodes;
     // when the trees are pre-labelled we trust the labels, so we don't split a trunk into several trees
-    if (!point_labels_ && sections_[sec_].split_count < 2)
+    if (!point_labels_ && sections_[sec_].split_count < params_->trunk_splits)
     {
       double thickness = best_dist; 
       bool points_removed = false;
-      double gap = params_->gap_ratio * sections_[sec_].max_distance_to_end; // gap threshold for splitting
-      double span = params_->span_ratio * estimated_radius; // span threshold for splitting
+      // the trunk split can have its own thresholds, so stems of a clump separate without changing how
+      // branches split (papers/frontier W6)
+      double gap = params_->trunk_gap > 0.0 ? params_->trunk_gap
+                                            : params_->gap_ratio * sections_[sec_].max_distance_to_end;
+      double span = (params_->trunk_span_ratio > 0.0 ? params_->trunk_span_ratio : params_->span_ratio) * estimated_radius;
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
 
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)

@@ -111,7 +111,8 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalKeyValueArgument trunks_option("trunks", 't', &trunks_file);
   ray::DoubleArgument gradient(0.001, 1000.0, 1.0), global_taper(0.0, 1.0), global_taper_factor(0.0, 1.0), taper_weight(0.0, 1e9),
     taper_prior_sd(0.0, 10.0), taper_exponent(-3.0, 3.0), taper_vote_cv(0.001, 10.0),
-    radius_floor(0.0, 1.0), branch_vote_sd(0.0, 10.0), stem_taper(0.0, 3.0);
+    radius_floor(0.0, 1.0), branch_vote_sd(0.0, 10.0), stem_taper(0.0, 3.0), trunk_gap(0.0, 10.0), trunk_span_ratio(0.0, 10.0);
+  ray::IntArgument trunk_splits(0, 100);
   ray::OptionalKeyValueArgument gradient_option("gradient", 'g', &gradient);
   ray::OptionalFlagArgument exclude_rays("exclude_rays", 'e'), segment_branches("branch_segmentation", 'b'), stalks("stalks", 's'), use_rays("use_rays", 'u');
   ray::OptionalFlagArgument segmented("segmented", 'l');
@@ -147,6 +148,9 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalKeyValueArgument radius_floor_option("radius_floor", 'p', &radius_floor);
   ray::OptionalKeyValueArgument branch_vote_sd_option("branch_vote_sd", 'e', &branch_vote_sd);
   ray::OptionalKeyValueArgument stem_taper_option("stem_taper", 't', &stem_taper);
+  ray::OptionalKeyValueArgument trunk_gap_option("trunk_gap", 'G', &trunk_gap);
+  ray::OptionalKeyValueArgument trunk_span_ratio_option("trunk_span_ratio", 'S', &trunk_span_ratio);
+  ray::OptionalKeyValueArgument trunk_splits_option("trunk_splits", 'N', &trunk_splits);
   ray::OptionalKeyValueArgument leaf_option("leaf", 'l', &leaf_file);
   ray::OptionalKeyValueArgument leaf_area_option("leaf_area", 'a', &leaf_area);
   ray::OptionalKeyValueArgument leaf_droop_option("leaf_droop", 'd', &leaf_droop);
@@ -168,7 +172,8 @@ int rayExtract(int argc, char *argv[])
       &cylinder_length_to_width_option, &gap_ratio_option, &span_ratio_option, &gravity_factor_option,
       &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &taper_weight_option, &taper_prior_sd_option,
       &taper_exponent_option, &taper_vote_cv_option, &radius_floor_option,
-      &branch_vote_sd_option, &stem_taper_option, &use_rays, &segmented,
+      &branch_vote_sd_option, &stem_taper_option, &trunk_gap_option,
+      &trunk_span_ratio_option, &trunk_splits_option, &use_rays, &segmented,
       &labels_only, &no_mesh, &graph_cache_option, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
@@ -286,6 +291,18 @@ int rayExtract(int argc, char *argv[])
     if (stem_taper_option.isSet())
     {
       params.stem_taper = stem_taper.value();
+    }
+    if (trunk_gap_option.isSet())
+    {
+      params.trunk_gap = trunk_gap.value();
+    }
+    if (trunk_span_ratio_option.isSet())
+    {
+      params.trunk_span_ratio = trunk_span_ratio.value();
+    }
+    if (trunk_splits_option.isSet())
+    {
+      params.trunk_splits = trunk_splits.value();
     }   
     params.use_rays = use_rays.isSet();
     if (graph_cache_option.isSet())

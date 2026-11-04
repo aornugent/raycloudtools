@@ -38,6 +38,9 @@ struct RAYLIB_EXPORT TreesParams
   double radius_floor;    // radius measurement floor delta (m): votes below 2 delta are dropped, others gain (delta / r)^2
   double branch_vote_sd;  // extra log sd of a branch vote, for the share-rule assumption it rests on
   double stem_taper;      // radius also scales by (d / d_root)^stem_taper along each path, d = distance to the tips
+  double trunk_gap;       // if > 0, the trunk split's gap (m) instead of gap_ratio x length, so stems split apart
+  double trunk_span_ratio; // if > 0, the trunk split's span ratio instead of span_ratio (branches keep theirs)
+  int trunk_splits;       // how many times one root group may split into trees (stems)
   bool use_rays; // use the full rays in order to estimate a smaller radius when points are not all on the real branch
   std::string graph_cache; // if set, load the shortest-path graph from this file, or compute it and save it there
 };
