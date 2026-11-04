@@ -32,6 +32,12 @@ struct RAYLIB_EXPORT TreesParams
   double global_taper;     // forced global taper, uses global_taper_factor to define how much it is applied
   double global_taper_factor; // 0 estimates per-tree tapering, 1 uses per-scan tapering, 0.5 is mid-way on mid-weight trees
   double taper_weight;  // if > 0, the weight of the global taper prior, instead of the run's running sum(w^2)/sum(w)
+  double taper_prior_sd;  // if > 0, a per-tree conjugate taper blend in log space: prior log T ~ N(log T0(H), sd^2)
+  double taper_exponent;  // the prior mean T0(H) = global_taper * (H / 10 m)^taper_exponent
+  double taper_vote_cv;   // coefficient of variation of one taper vote from a well-measured section
+  double radius_floor;    // radius measurement floor delta (m): votes below 2 delta are dropped, others gain (delta / r)^2
+  double branch_vote_sd;  // extra log sd of a branch vote, for the share-rule assumption it rests on
+  double stem_taper;      // radius also scales by (d / d_root)^stem_taper along each path, d = distance to the tips
   bool use_rays; // use the full rays in order to estimate a smaller radius when points are not all on the real branch
   std::string graph_cache; // if set, load the shortest-path graph from this file, or compute it and save it there
 };
@@ -54,6 +60,8 @@ public:
 
   /// save the trees representation to a text file
   bool save(const std::string &filename, const Eigen::Vector3d &offset, bool verbose) const;
+  /// write one line per tree (in _trees.txt order) with its taper blend and measured trunk radius
+  bool saveTaper(const std::string &filename, const Eigen::Vector3d &offset) const;
 
 private:
   /// The piecewise cylindrical represenation of all of the trees
@@ -100,8 +108,13 @@ private:
                             const std::vector<int> &root_segs);
   /// estimate the mean taper for the specified section
   double meanTaper(const BranchSection &section) const;
+  /// the per-tree taper blend's parts: prior mean, the tree's own mean vote, data share and result
+  struct TaperBlend { double prior, data, data_var, data_share, result; };
+  TaperBlend taperBlend(int root) const;
   /// estimate the radius for the specified section
   double radius(const BranchSection &section) const;
+  /// the along-path taper factor (d / d_root)^stem_taper, 1 at the tree base
+  double stemTaper(const BranchSection &section) const;
   /// remove elements of nodes that are too distant to the set of end points
   bool removeDistantPoints(std::vector<int> &nodes);
 
@@ -130,6 +143,12 @@ struct RAYLIB_EXPORT BranchSection
     , max_distance_to_end(0.0)
     , total_taper(0)
     , total_weight(0)
+    , trunk_precision(0)
+    , trunk_log_precision(0)
+    , branch_precision(0)
+    , branch_log_precision(0)
+    , trunk_radius(0)
+    , trunk_z(0)
     , len(0)
     , accuracy(0)
     , junction_weight(0)
@@ -147,6 +166,9 @@ struct RAYLIB_EXPORT BranchSection
   double max_distance_to_end;
   double total_taper; // a weighted taper estimate
   double total_weight; // the weighting
+  double trunk_precision, trunk_log_precision;    // sums of 1 / var and log(vote) / var over trunk votes (roots only)
+  double branch_precision, branch_log_precision;  // the same over branch votes, before their shared share-rule error
+  double trunk_radius, trunk_z; // the measured trunk radius and the height of its girth slab (root sections only)
   double len, accuracy, junction_weight;
   double radius_scale;
   int split_count;
