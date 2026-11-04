@@ -23,6 +23,7 @@ TreesParams::TreesParams()
   , segment_branches(false)
   , global_taper(0.012)
   , global_taper_factor(0.3)
+  , taper_weight(0.0)
 {}
 
 /// The main reconstruction algorithm
@@ -297,6 +298,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
   }
 
   std::cout << "cloud's estimated mean taper ratio (diameter / length): " << 2.0 * forest_taper_ / forest_weight_ << std::endl;
+  std::cout << "cloud's taper weight sum(w^2)/sum(w): " << forest_weight_squared_ / forest_weight_ << " (sum w " << forest_weight_
+            << ", sum w^2 " << forest_weight_squared_ << ")" << std::endl;
 }
 
 // If 1 tree plus some low lying foliage is in the node, then it won't be split if the foliage doesn't reach to the 
@@ -342,7 +345,9 @@ double Trees::meanTaper(const BranchSection &section) const
 {
   int root = section.root;
   double mean_taper = params_->global_taper ? params_->global_taper : (forest_taper_ / forest_weight_);
-  double mean_weight = forest_weight_squared_ / forest_weight_;
+  // the prior's weight: by default the running sum(w^2)/sum(w) over every taper vote so far in this run, which
+  // couples each tree to the others in the cloud and to the processing order; a fixed taper_weight decouples them
+  double mean_weight = params_->taper_weight > 0.0 ? params_->taper_weight : forest_weight_squared_ / forest_weight_;
   double taper = sections_[root].total_taper / sections_[root].total_weight;
   double weight = sections_[root].total_weight;
   double blend = params_->global_taper_factor * params_->global_taper_factor * params_->global_taper_factor;

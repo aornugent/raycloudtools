@@ -59,6 +59,7 @@ void usage(int exit_code = 1)
     std::cout << "                            --girth_height_ratio 0.12 - (-i) the amount up tree's height to estimate trunk girth" << std::endl;
     std::cout << "                            --global_taper 0.024 - (-a) force a taper value (diameter per length) for trees under global_taper_factor of max tree height. Use 0 to estimate global taper from the data" << std::endl;
     std::cout << "                            --global_taper_factor 0.3- (-o) 1 estimates same taper for whole scan, 0 is per-tree tapering. Like a soft cutoff at this amount of max tree height" << std::endl;
+    std::cout << "                            --taper_weight 0     - (-j) fixed weight of the global taper prior. 0 uses the run's sum(w^2)/sum(w), which couples every tree to the rest of the cloud" << std::endl;
     std::cout << "                            --gravity_factor 0.3 - (-f) larger values preference vertical trees" << std::endl;
     std::cout << "                            --branch_segmentation- (-b) _segmented.ply is per branch segment" << std::endl;
     std::cout << "                            --grid_width 10      - (-w) crops results assuming cloud has been gridded with given width" << std::endl;
@@ -102,7 +103,7 @@ int rayExtract(int argc, char *argv[])
   ray::TextArgument forest("forest"), trees("trees"), trunks("trunks"), terrain("terrain"), leaves("leaves");
   ray::OptionalKeyValueArgument groundmesh_option("ground", 'g', &mesh_file);
   ray::OptionalKeyValueArgument trunks_option("trunks", 't', &trunks_file);
-  ray::DoubleArgument gradient(0.001, 1000.0, 1.0), global_taper(0.0, 1.0), global_taper_factor(0.0, 1.0);
+  ray::DoubleArgument gradient(0.001, 1000.0, 1.0), global_taper(0.0, 1.0), global_taper_factor(0.0, 1.0), taper_weight(0.0, 1e9);
   ray::OptionalKeyValueArgument gradient_option("gradient", 'g', &gradient);
   ray::OptionalFlagArgument exclude_rays("exclude_rays", 'e'), segment_branches("branch_segmentation", 'b'), stalks("stalks", 's'), use_rays("use_rays", 'u');
   ray::OptionalFlagArgument segmented("segmented", 'l');
@@ -131,6 +132,7 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalKeyValueArgument grid_width_option("grid_width", 'w', &grid_width);
   ray::OptionalKeyValueArgument global_taper_option("global_taper", 'a', &global_taper);
   ray::OptionalKeyValueArgument global_taper_factor_option("global_taper_factor", 'o', &global_taper_factor);
+  ray::OptionalKeyValueArgument taper_weight_option("taper_weight", 'j', &taper_weight);
   ray::OptionalKeyValueArgument leaf_option("leaf", 'l', &leaf_file);
   ray::OptionalKeyValueArgument leaf_area_option("leaf_area", 'a', &leaf_area);
   ray::OptionalKeyValueArgument leaf_droop_option("leaf_droop", 'd', &leaf_droop);
@@ -150,7 +152,7 @@ int rayExtract(int argc, char *argv[])
     argc, argv, { &trees, &cloud_file, &mesh_file },
     { &max_diameter_option, &distance_limit_option, &height_min_option, &crop_length_option, &girth_height_ratio_option,
       &cylinder_length_to_width_option, &gap_ratio_option, &span_ratio_option, &gravity_factor_option,
-      &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &use_rays, &segmented,
+      &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &taper_weight_option, &use_rays, &segmented,
       &labels_only, &no_mesh, &graph_cache_option, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
@@ -240,6 +242,10 @@ int rayExtract(int argc, char *argv[])
     if (global_taper_factor_option.isSet())
     {
       params.global_taper_factor = global_taper_factor.value();
+    }
+    if (taper_weight_option.isSet())
+    {
+      params.taper_weight = taper_weight.value();
     }   
     params.use_rays = use_rays.isSet();
     if (graph_cache_option.isSet())
