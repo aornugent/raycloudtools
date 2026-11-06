@@ -60,6 +60,12 @@ void usage(int exit_code = 1)
     std::cout << "                            --global_taper 0.024 - (-a) force a taper value (diameter per length) for trees under global_taper_factor of max tree height. Use 0 to estimate global taper from the data" << std::endl;
     std::cout << "                            --global_taper_factor 0.3- (-o) 1 estimates same taper for whole scan, 0 is per-tree tapering. Like a soft cutoff at this amount of max tree height" << std::endl;
     std::cout << "                            --taper_weight 0     - (-j) fixed weight of the global taper prior. 0 uses the run's sum(w^2)/sum(w), which couples every tree to the rest of the cloud" << std::endl;
+    std::cout << "                            --taper_prior_sd 0   - (-x) if > 0, blend each tree's taper with the prior in log space, weighted by its own vote count and scatter (prior sd of log taper)" << std::endl;
+    std::cout << "                            --taper_exponent 0   - (-y) prior taper T0(H) = global_taper * (H/10m)^exponent, with --taper_prior_sd" << std::endl;
+    std::cout << "                            --taper_vote_cv 0.1  - (-z) coefficient of variation of one well-measured taper vote, with --taper_prior_sd" << std::endl;
+    std::cout << "                            --radius_floor 0.01  - (-p) radius measurement floor (m): votes from radii near it count less, with --taper_prior_sd" << std::endl;
+    std::cout << "                            --branch_vote_sd 1.0 - (-e) extra log sd of branch votes (they assume the share rule), with --taper_prior_sd" << std::endl;
+    std::cout << "                            --stem_taper 0       - (-t) radii also taper along each path as (distance to tips / at the base)^this; 0 is constant between forks" << std::endl;
     std::cout << "                            --gravity_factor 0.3 - (-f) larger values preference vertical trees" << std::endl;
     std::cout << "                            --branch_segmentation- (-b) _segmented.ply is per branch segment" << std::endl;
     std::cout << "                            --grid_width 10      - (-w) crops results assuming cloud has been gridded with given width" << std::endl;
@@ -103,7 +109,10 @@ int rayExtract(int argc, char *argv[])
   ray::TextArgument forest("forest"), trees("trees"), trunks("trunks"), terrain("terrain"), leaves("leaves");
   ray::OptionalKeyValueArgument groundmesh_option("ground", 'g', &mesh_file);
   ray::OptionalKeyValueArgument trunks_option("trunks", 't', &trunks_file);
-  ray::DoubleArgument gradient(0.001, 1000.0, 1.0), global_taper(0.0, 1.0), global_taper_factor(0.0, 1.0), taper_weight(0.0, 1e9);
+  ray::DoubleArgument gradient(0.001, 1000.0, 1.0), global_taper(0.0, 1.0), global_taper_factor(0.0, 1.0), taper_weight(0.0, 1e9),
+    taper_prior_sd(0.0, 10.0), taper_exponent(-3.0, 3.0), taper_vote_cv(0.001, 10.0),
+    radius_floor(0.0, 1.0), branch_vote_sd(0.0, 10.0), stem_taper(0.0, 3.0), trunk_gap(0.0, 10.0), trunk_span_ratio(0.0, 10.0);
+  ray::IntArgument trunk_splits(0, 100);
   ray::OptionalKeyValueArgument gradient_option("gradient", 'g', &gradient);
   ray::OptionalFlagArgument exclude_rays("exclude_rays", 'e'), segment_branches("branch_segmentation", 'b'), stalks("stalks", 's'), use_rays("use_rays", 'u');
   ray::OptionalFlagArgument segmented("segmented", 'l');
@@ -133,6 +142,15 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalKeyValueArgument global_taper_option("global_taper", 'a', &global_taper);
   ray::OptionalKeyValueArgument global_taper_factor_option("global_taper_factor", 'o', &global_taper_factor);
   ray::OptionalKeyValueArgument taper_weight_option("taper_weight", 'j', &taper_weight);
+  ray::OptionalKeyValueArgument taper_prior_sd_option("taper_prior_sd", 'x', &taper_prior_sd);
+  ray::OptionalKeyValueArgument taper_exponent_option("taper_exponent", 'y', &taper_exponent);
+  ray::OptionalKeyValueArgument taper_vote_cv_option("taper_vote_cv", 'z', &taper_vote_cv);
+  ray::OptionalKeyValueArgument radius_floor_option("radius_floor", 'p', &radius_floor);
+  ray::OptionalKeyValueArgument branch_vote_sd_option("branch_vote_sd", 'e', &branch_vote_sd);
+  ray::OptionalKeyValueArgument stem_taper_option("stem_taper", 't', &stem_taper);
+  ray::OptionalKeyValueArgument trunk_gap_option("trunk_gap", 'G', &trunk_gap);
+  ray::OptionalKeyValueArgument trunk_span_ratio_option("trunk_span_ratio", 'S', &trunk_span_ratio);
+  ray::OptionalKeyValueArgument trunk_splits_option("trunk_splits", 'N', &trunk_splits);
   ray::OptionalKeyValueArgument leaf_option("leaf", 'l', &leaf_file);
   ray::OptionalKeyValueArgument leaf_area_option("leaf_area", 'a', &leaf_area);
   ray::OptionalKeyValueArgument leaf_droop_option("leaf_droop", 'd', &leaf_droop);
@@ -152,7 +170,10 @@ int rayExtract(int argc, char *argv[])
     argc, argv, { &trees, &cloud_file, &mesh_file },
     { &max_diameter_option, &distance_limit_option, &height_min_option, &crop_length_option, &girth_height_ratio_option,
       &cylinder_length_to_width_option, &gap_ratio_option, &span_ratio_option, &gravity_factor_option,
-      &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &taper_weight_option, &use_rays, &segmented,
+      &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &taper_weight_option, &taper_prior_sd_option,
+      &taper_exponent_option, &taper_vote_cv_option, &radius_floor_option,
+      &branch_vote_sd_option, &stem_taper_option, &trunk_gap_option,
+      &trunk_span_ratio_option, &trunk_splits_option, &use_rays, &segmented,
       &labels_only, &no_mesh, &graph_cache_option, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
@@ -246,6 +267,42 @@ int rayExtract(int argc, char *argv[])
     if (taper_weight_option.isSet())
     {
       params.taper_weight = taper_weight.value();
+    }
+    if (taper_prior_sd_option.isSet())
+    {
+      params.taper_prior_sd = taper_prior_sd.value();
+    }
+    if (taper_exponent_option.isSet())
+    {
+      params.taper_exponent = taper_exponent.value();
+    }
+    if (taper_vote_cv_option.isSet())
+    {
+      params.taper_vote_cv = taper_vote_cv.value();
+    }
+    if (radius_floor_option.isSet())
+    {
+      params.radius_floor = radius_floor.value();
+    }
+    if (branch_vote_sd_option.isSet())
+    {
+      params.branch_vote_sd = branch_vote_sd.value();
+    }
+    if (stem_taper_option.isSet())
+    {
+      params.stem_taper = stem_taper.value();
+    }
+    if (trunk_gap_option.isSet())
+    {
+      params.trunk_gap = trunk_gap.value();
+    }
+    if (trunk_span_ratio_option.isSet())
+    {
+      params.trunk_span_ratio = trunk_span_ratio.value();
+    }
+    if (trunk_splits_option.isSet())
+    {
+      params.trunk_splits = trunk_splits.value();
     }   
     params.use_rays = use_rays.isSet();
     if (graph_cache_option.isSet())
@@ -285,6 +342,7 @@ int rayExtract(int argc, char *argv[])
 
     // output the picewise cylindrical description of the trees
     trees.save(cloud_file.nameStub() + "_trees.txt", offset, verbose.isSet());
+    trees.saveTaper(cloud_file.nameStub() + "_taper.txt", offset);
     // we also save a segmented (one colour per tree) file, as this is a useful output
     cloud.translate(offset);
     if (labels_only.isSet())

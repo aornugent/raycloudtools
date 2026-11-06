@@ -24,6 +24,15 @@ TreesParams::TreesParams()
   , global_taper(0.012)
   , global_taper_factor(0.3)
   , taper_weight(0.0)
+  , taper_prior_sd(0.0)
+  , taper_exponent(0.0)
+  , taper_vote_cv(0.1)
+  , radius_floor(0.01)
+  , branch_vote_sd(1.0)
+  , stem_taper(0.0)
+  , trunk_gap(0.0)
+  , trunk_span_ratio(0.0)
+  , trunk_splits(2)
 {}
 
 /// The main reconstruction algorithm
@@ -150,12 +159,15 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     sections_[sec_].ends = best_ends;
     nodes = best_nodes;
     // when the trees are pre-labelled we trust the labels, so we don't split a trunk into several trees
-    if (!point_labels_ && sections_[sec_].split_count < 2)
+    if (!point_labels_ && sections_[sec_].split_count < params_->trunk_splits)
     {
       double thickness = best_dist; 
       bool points_removed = false;
-      double gap = params_->gap_ratio * sections_[sec_].max_distance_to_end; // gap threshold for splitting
-      double span = params_->span_ratio * estimated_radius; // span threshold for splitting
+      // the trunk split can have its own thresholds, so stems of a clump separate without changing how
+      // branches split (papers/frontier W6)
+      double gap = params_->trunk_gap > 0.0 ? params_->trunk_gap
+                                            : params_->gap_ratio * sections_[sec_].max_distance_to_end;
+      double span = (params_->trunk_span_ratio > 0.0 ? params_->trunk_span_ratio : params_->span_ratio) * estimated_radius;
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
 
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)
@@ -183,6 +195,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     sections_[sec_].ends.clear();
     extractNodesAndEndsFromRoots(nodes, base, children, 0.0, best_dist/2.0); // make it lower
     estimateCylinderTaper(estimated_radius, best_accuracy, false); // update the expected taper
+    sections_[sec_].trunk_radius = estimated_radius;
+    sections_[sec_].trunk_z = best_tip[2];
   }
   if (verbose)
   {
@@ -266,7 +280,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     double accuracy = 0.0;
     double rad = estimateCylinderRadius(nodes, dir, accuracy);
     // and estimate taper
-    estimateCylinderTaper(rad / sections_[sec_].radius_scale, accuracy, extract_from_ends);
+    estimateCylinderTaper(rad / (sections_[sec_].radius_scale * stemTaper(sections_[sec_])), accuracy, extract_from_ends);
 
     // now add the single child for this particular tree node, assuming there are still ends
     if (sections_[sec_].ends.size() > 0)
@@ -341,9 +355,50 @@ bool Trees::removeDistantPoints(std::vector<int> &nodes)
   return found;
 }
 
+Trees::TaperBlend Trees::taperBlend(int root) const
+{
+  // Prior: log T ~ N(log T0(H), sd^2), T0(H) = global_taper * (H / 10)^taper_exponent.
+  // Data: two pooled measurements of log T, combined by inverse variance (estimateCylinderTaper):
+  //  - the trunk votes, each with log variance (taper_vote_cv^2 + (radius_floor / r)^2) / accuracy;
+  //  - the branch votes, pooled the same way, plus branch_vote_sd^2 once: their error from the share rule they
+  //    assume is shared by the whole tree, so it doesn't average away over many twigs.
+  // Votes from radii under 2 radius_floor are dropped (the trust floor: below it a radius is mostly floor).
+  // Nothing here reads another tree, so a tree's taper depends only on its own votes (research/20, frontier H 2.3).
+  const BranchSection &r = sections_[root];
+  TaperBlend b{};
+  b.prior = params_->global_taper * std::pow(std::max(r.tree_height, 0.01) / 10.0, params_->taper_exponent);
+  double precision = 0.0, log_precision = 0.0;
+  if (r.trunk_precision > 0.0)
+  {
+    precision += r.trunk_precision;
+    log_precision += r.trunk_log_precision;
+  }
+  if (r.branch_precision > 0.0)
+  {
+    double var = 1.0 / r.branch_precision + params_->branch_vote_sd * params_->branch_vote_sd;
+    precision += 1.0 / var;
+    log_precision += (r.branch_log_precision / r.branch_precision) / var;
+  }
+  if (precision <= 0.0)
+  {
+    b.result = b.prior;
+    return b;
+  }
+  b.data = std::exp(log_precision / precision);
+  b.data_var = 1.0 / precision;
+  double var_prior = params_->taper_prior_sd * params_->taper_prior_sd;
+  b.data_share = var_prior / (var_prior + b.data_var);
+  b.result = std::exp(b.data_share * std::log(b.data) + (1.0 - b.data_share) * std::log(b.prior));
+  return b;
+}
+
 double Trees::meanTaper(const BranchSection &section) const
 {
   int root = section.root;
+  if (params_->taper_prior_sd > 0.0)
+  {
+    return taperBlend(root).result;
+  }
   double mean_taper = params_->global_taper ? params_->global_taper : (forest_taper_ / forest_weight_);
   // the prior's weight: by default the running sum(w^2)/sum(w) over every taper vote so far in this run, which
   // couples each tree to the others in the cloud and to the processing order; a fixed taper_weight decouples them
@@ -365,7 +420,18 @@ double Trees::meanTaper(const BranchSection &section) const
 
 double Trees::radius(const BranchSection &section) const 
 { 
-  return sections_[section.root].tree_height * meanTaper(section) * section.radius_scale; // scaled down from root's estimated radius
+  return sections_[section.root].tree_height * meanTaper(section) * section.radius_scale * stemTaper(section); // scaled down from root's estimated radius
+}
+
+double Trees::stemTaper(const BranchSection &section) const
+{
+  if (params_->stem_taper == 0.0)
+  {
+    return 1.0;
+  }
+  double d_root = std::max(sections_[section.root].max_distance_to_end, 1e-3);
+  double ratio = std::min(1.0, std::max(section.max_distance_to_end / d_root, 0.02));
+  return std::pow(ratio, params_->stem_taper);
 }
 
 void Trees::calculatePointDistancesToEnd()
@@ -917,6 +983,17 @@ void Trees::estimateCylinderTaper(double radius, double accuracy, bool extract_f
 
   sections_[root].total_taper += taper;
   sections_[root].total_weight += weight;
+  // the per-tree blend's vote (taperBlend): log variance from the vote's own measured radius
+  double measured = radius * sections_[sec_].radius_scale * stemTaper(sections_[sec_]);  // callers pass rad / (scale * stem taper)
+  if (radius > 0.0 && measured >= 2.0 * params_->radius_floor)
+  {
+    double var = (params_->taper_vote_cv * params_->taper_vote_cv +
+                  (params_->radius_floor / measured) * (params_->radius_floor / measured)) / std::max(accuracy, 0.05);
+    double &prec = par > -1 ? sections_[root].branch_precision : sections_[root].trunk_precision;
+    double &logprec = par > -1 ? sections_[root].branch_log_precision : sections_[root].trunk_log_precision;
+    prec += 1.0 / var;
+    logprec += std::log(radius / L) / var;
+  }
   if (sections_[root].total_weight == 0.0)
   {
     std::cout << "bad section weight: " << l << "," << accuracy << "," << junction_weight << std::endl;
@@ -1235,6 +1312,45 @@ bool Trees::save(const std::string &filename, const Eigen::Vector3d &offset, boo
       }
     }
     ofs << std::endl;
+  }
+  return true;
+}
+
+bool Trees::saveTaper(const std::string &filename, const Eigen::Vector3d &offset) const
+{
+  std::ofstream ofs(filename.c_str(), std::ios::out);
+  if (!ofs.is_open())
+  {
+    std::cerr << "Error: cannot open " << filename << " for writing." << std::endl;
+    return false;
+  }
+  // one line per tree, in _trees.txt order; tapers are radius per length (half the CLI's diameter per length)
+  ofs << "# per-tree taper blend: height (m), base z, measured trunk radius (m) and its slab height z, prior T0(H), "
+         "the tree's inverse-variance mean vote and its log variance, data share, the taper used. With "
+         "--taper_prior_sd the data share is the conjugate weight; otherwise data is RCT's weighted mean vote and "
+         "data_share the default blend's data fraction" << std::endl;
+  ofs << "height,base_z,trunk_radius,trunk_z,prior,data,data_var,data_share,taper" << std::endl;
+  ofs << std::setprecision(6);
+  for (size_t sec = 0; sec < sections_.size(); sec++)
+  {
+    const auto &section = sections_[sec];
+    if (section.parent >= 0 || section.children.empty())  // the same filter as save()
+    {
+      continue;
+    }
+    int root = section.root;
+    TaperBlend b = taperBlend(root);
+    double used = meanTaper(section);
+    if (params_->taper_prior_sd <= 0.0)  // report the default blend's data fraction for comparison
+    {
+      double prior = params_->global_taper ? params_->global_taper : (forest_taper_ / forest_weight_);
+      b.prior = prior;
+      b.data = sections_[root].total_weight > 0.0 ? sections_[root].total_taper / sections_[root].total_weight : 0.0;
+      b.data_share = std::abs(b.data - prior) > 1e-12 ? (used - prior) / (b.data - prior) : 1.0;
+    }
+    ofs << section.tree_height << "," << section.tip[2] + offset[2] << ","
+        << section.trunk_radius << "," << section.trunk_z + offset[2] << "," << b.prior << "," << b.data << "," << b.data_var
+        << "," << b.data_share << "," << used << std::endl;
   }
   return true;
 }
