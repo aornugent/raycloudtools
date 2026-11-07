@@ -34,6 +34,8 @@ struct RAYLIB_EXPORT TreesParams
   double taper_weight;  // if > 0, the weight of the global taper prior, instead of the run's running sum(w^2)/sum(w)
   bool use_rays; // use the full rays in order to estimate a smaller radius when points are not all on the real branch
   std::string graph_cache; // if set, load the shortest-path graph from this file, or compute it and save it there
+  bool geometric_centre; // after the algebraic centre step, iterate a robust geometric circle fit with a radius prior
+  bool slab_sections; // fit sections made by a split on their share of the slab of points, not on the path chains
 };
 
 struct BranchSection;  // forwards declaration
@@ -74,13 +76,17 @@ private:
   std::vector<std::vector<int>> findPointClusters(const Eigen::Vector3d &base, bool &points_removed,
                                                   double thickness, double span, double gap);
   /// split the branch section to one branch for each cluster
-  void bifurcate(const std::vector<std::vector<int>> &clusters, double thickness, std::vector<std::vector<int>> &children, bool clip_tree, bool add_offshoots);
+  void bifurcate(const std::vector<std::vector<int>> &clusters, double thickness, std::vector<std::vector<int>> &children, bool clip_tree, bool add_offshoots,
+                 const std::vector<int> *slab = nullptr, double prior_radius = 0.0);
+  /// share the slab of points among the clusters' path chains (nearest chain point), one list per cluster
+  std::vector<std::vector<int>> partitionSlab(const std::vector<std::vector<int>> &clusters, const std::vector<int> &slab,
+                                              double max_dist) const;
   /// find the points within the branch section from its end points
   void extractNodesFromEnds(std::vector<int> &nodes);
   /// set the branch section tip position from the supplied list of Vertex IDs
   Eigen::Vector3d calculateTipFromVertices(const std::vector<int> &nodes) const;
   /// estimate the vector to the cylinder centre from the set of nodes
-  Eigen::Vector3d vectorToCylinderCentre(const std::vector<int> &nodes, const Eigen::Vector3d &dir) const;
+  Eigen::Vector3d vectorToCylinderCentre(const std::vector<int> &nodes, const Eigen::Vector3d &dir, double prior_radius = 0.0) const;
   /// estimate the cylinder's radius
   double estimateCylinderRadius(const std::vector<int> &nodes, const Eigen::Vector3d &dir, double &accuracy);
   /// estimate the cylinder's taper rate from its centre, @c dir and set of nodes
@@ -154,6 +160,10 @@ struct RAYLIB_EXPORT BranchSection
   std::vector<int> roots;  // root points
   std::vector<int> ends;
   std::vector<int> children;
+  std::vector<int> slab;  // after a split: this section's share of the slab of points (slab_sections)
+  double measured_radius{0};  // the radius vote's measured radius, for diagnostics
+  int n_nodes{0};  // points the section was fitted on, for diagnostics
+  int from_ends{0};  // 1 if fitted after a split
 };
 
 /// Converts an index in to a unique colour
