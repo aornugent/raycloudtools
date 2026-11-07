@@ -66,6 +66,8 @@ void usage(int exit_code = 1)
     std::cout << "                            --radius_floor 0.01  - (-p) radius measurement floor (m): votes from radii near it count less, with --taper_prior_sd" << std::endl;
     std::cout << "                            --branch_vote_sd 1.0 - (-e) extra log sd of branch votes (they assume the share rule), with --taper_prior_sd" << std::endl;
     std::cout << "                            --stem_taper 0       - (-t) radii also taper along each path as (distance to tips / at the base)^this; 0 is constant between forks" << std::endl;
+    std::cout << "                            --geometric_centre   - (-C) iterate a geometric circle fit (radius prior) after the algebraic centre step" << std::endl;
+    std::cout << "                            --slab_sections      - (-L) fit sections made by a split on their share of the slab of points, not the path chains" << std::endl;
     std::cout << "                            --gravity_factor 0.3 - (-f) larger values preference vertical trees" << std::endl;
     std::cout << "                            --branch_segmentation- (-b) _segmented.ply is per branch segment" << std::endl;
     std::cout << "                            --grid_width 10      - (-w) crops results assuming cloud has been gridded with given width" << std::endl;
@@ -118,6 +120,7 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalFlagArgument segmented("segmented", 'l');
   ray::OptionalFlagArgument labels_only("labels_only", 'q');
   ray::OptionalFlagArgument no_mesh("no_mesh", 'k');
+  ray::OptionalFlagArgument geometric_centre("geometric_centre", 'C'), slab_sections("slab_sections", 'L');
   ray::FileArgument graph_cache_file(false);
   ray::OptionalKeyValueArgument graph_cache_option("graph_cache", 'r', &graph_cache_file);
   ray::DoubleArgument width(0.01, 10.0, 0.25), drop(0.001, 1.0), max_gradient(0.01, 5.0), min_gradient(0.01, 5.0);
@@ -174,7 +177,7 @@ int rayExtract(int argc, char *argv[])
       &taper_exponent_option, &taper_vote_cv_option, &radius_floor_option,
       &branch_vote_sd_option, &stem_taper_option, &trunk_gap_option,
       &trunk_span_ratio_option, &trunk_splits_option, &use_rays, &segmented,
-      &labels_only, &no_mesh, &graph_cache_option, &verbose, &view_flag });
+      &labels_only, &no_mesh, &graph_cache_option, &geometric_centre, &slab_sections, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
   if (!extract_trunks && !extract_forest && !extract_terrain && !extract_trees && !extract_leaves)
@@ -310,6 +313,8 @@ int rayExtract(int argc, char *argv[])
       params.graph_cache = graph_cache_file.name();
     } 
     params.segment_branches = segment_branches.isSet();
+    params.geometric_centre = geometric_centre.isSet();
+    params.slab_sections = slab_sections.isSet();
 
     // for a pre-segmented cloud we take the tree label of each point from its colour, so the tree
     // structures are estimated per label rather than segmenting the trees from the point data
