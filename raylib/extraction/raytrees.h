@@ -45,6 +45,7 @@ struct RAYLIB_EXPORT TreesParams
   std::string graph_cache; // if set, load the shortest-path graph from this file, or compute it and save it there
   bool geometric_centre; // after the algebraic centre step, iterate a robust geometric circle fit with a radius prior
   bool slab_sections; // fit sections made by a split on their share of the slab of points, not on the path chains
+  bool export_sections; // record what the fit measured and decided, for saveSections (changes no output)
 };
 
 struct BranchSection;  // forwards declaration
@@ -67,8 +68,36 @@ public:
   bool save(const std::string &filename, const Eigen::Vector3d &offset, bool verbose) const;
   /// write one line per tree (in _trees.txt order) with its taper blend and measured trunk radius
   bool saveTaper(const std::string &filename, const Eigen::Vector3d &offset) const;
+  /// with params.export_sections: write <stub>_sections.txt, _sections.bin and _modules.txt
+  bool saveSections(const std::string &stub, const Eigen::Vector3d &offset) const;
 
 private:
+  /// what one section's fit measured (export_sections), indexed by section
+  struct SectionRecord
+  {
+    bool measured{false};
+    double rad{0}, accuracy{0};
+    int n_nodes{0}, from_ends{0};
+    Eigen::Vector3d centroid{0, 0, 0}, centre{0, 0, 0}, dir{0, 0, 0};
+  };
+  /// one split test (export_sections): the end points clustered and the agglomeration's clusters
+  struct SplitTest
+  {
+    int sec, attempt;
+    double thickness, gap, span;
+    std::vector<Eigen::Vector3d> ps;         // the clustered end points (on the section's top boundary)
+    std::vector<int> ids;                    // their points
+    std::vector<std::vector<int>> clusters;  // the agglomeration's clusters, as indices into ps, before any removal
+    std::vector<int> removed;                // 1 for clusters dropped as shorter than height_min (trunks)
+  };
+  void recordSection(double rad, double accuracy, int n_nodes, int from_ends, const Eigen::Vector3d &centroid,
+                     const Eigen::Vector3d &dir);
+  std::vector<SectionRecord> records_;
+  std::vector<SplitTest> split_tests_;
+  std::vector<std::vector<int>> beyond_tip_;  // per childless section, the points calculateSectionIds assigns past its ends
+  std::vector<int> point_section_ids_;        // calculateSectionIds' ownership, per point
+  std::vector<int> ray_section_ids_;          // the same per ray of the cloud (contiguous ids), -1 for none
+
   /// The piecewise cylindrical represenation of all of the trees
   std::vector<BranchSection> sections_;
 
