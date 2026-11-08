@@ -6,6 +6,7 @@
 #include "raytrees.h"
 #include <nabo/nabo.h>
 #include "rayclusters.h"
+#include <cstdlib>
 
 namespace ray
 {
@@ -33,6 +34,8 @@ TreesParams::TreesParams()
   , trunk_gap(0.0)
   , trunk_span_ratio(0.0)
   , trunk_splits(2)
+  , geometric_centre(false)
+  , slab_sections(false)
 {}
 
 /// The main reconstruction algorithm
@@ -197,6 +200,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     estimateCylinderTaper(estimated_radius, best_accuracy, false); // update the expected taper
     sections_[sec_].trunk_radius = estimated_radius;
     sections_[sec_].trunk_z = best_tip[2];
+    sections_[sec_].measured_radius = estimated_radius;
+    sections_[sec_].n_nodes = (int)best_nodes.size();
   }
   if (verbose)
   {
@@ -260,20 +265,26 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
         bool add_offshoots = true; // par != -1 && sections_[par].parent != -1;  // when this is false it can lead to whole branches missing.
         // if points have been removed then this only resets the current section's points
         // otherwise it creates new branch sections_ for each cluster and adds to the end of the sections_ list
-        bifurcate(clusters, thickness, children, false, add_offshoots);
+        bifurcate(clusters, thickness, children, false, add_offshoots, &nodes, span_rad);
       }
     }
 
     if (extract_from_ends) // we have split the ends, so we need to extract the set of nodes in a backwards manner
     {
       extractNodesFromEnds(nodes);
+      // the path chains are a thin strip along one side of the branch: fit on this section's share of the slab
+      if (params_->slab_sections && sections_[sec_].slab.size() > 5)
+      {
+        nodes.swap(sections_[sec_].slab);
+      }
+      std::vector<int>().swap(sections_[sec_].slab);
     }
     // estimate the section's tip (the centre of the cylinder of points)
     sections_[sec_].tip = calculateTipFromVertices(nodes);
     // get section's direction
     Eigen::Vector3d dir = par >= 0 ? (sections_[sec_].tip - sections_[par].tip).normalized() : Eigen::Vector3d(0, 0, 1);
     // shift to cylinder's centre
-    sections_[sec_].tip += vectorToCylinderCentre(nodes, dir);
+    sections_[sec_].tip += vectorToCylinderCentre(nodes, dir, radius(sections_[sec_]));
     // re-estimate direction
     dir = par >= 0 ? (sections_[sec_].tip - sections_[par].tip).normalized() : Eigen::Vector3d(0, 0, 1);
     // now find the segment radius
@@ -281,6 +292,9 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     double rad = estimateCylinderRadius(nodes, dir, accuracy);
     // and estimate taper
     estimateCylinderTaper(rad / (sections_[sec_].radius_scale * stemTaper(sections_[sec_])), accuracy, extract_from_ends);
+    sections_[sec_].measured_radius = rad;
+    sections_[sec_].n_nodes = (int)nodes.size();
+    sections_[sec_].from_ends = extract_from_ends ? 1 : 0;
 
     // now add the single child for this particular tree node, assuming there are still ends
     if (sections_[sec_].ends.size() > 0)
@@ -623,9 +637,68 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
 
 // split into multiple branches and add as new branch sections to the end of the sections_ list
 // that is being iterated through.
-void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thickness, std::vector<std::vector<int>> &children, bool clip_tree, bool add_offshoots)
+std::vector<std::vector<int>> Trees::partitionSlab(const std::vector<std::vector<int>> &clusters,
+                                                   const std::vector<int> &slab, double max_dist) const
+{
+  // the path chains of each cluster: from each end point up its shortest-path parents to the section's roots
+  std::vector<Eigen::Vector3d> chain_pos;
+  std::vector<int> chain_cluster;
+  std::vector<int> visited;
+  for (size_t k = 0; k < clusters.size(); k++)
+  {
+    for (auto &end : clusters[k])
+    {
+      int node = end;
+      while (node != -1)
+      {
+        if (std::find(visited.begin(), visited.end(), node) != visited.end())
+        {
+          break;
+        }
+        visited.push_back(node);
+        chain_pos.push_back(points_[node].pos);
+        chain_cluster.push_back(static_cast<int>(k));
+        if (std::find(sections_[sec_].roots.begin(), sections_[sec_].roots.end(), node) != sections_[sec_].roots.end())
+        {
+          break;
+        }
+        node = points_[node].parent;
+      }
+    }
+  }
+  std::vector<std::vector<int>> shares(clusters.size());
+  const double max_dist_sqr = max_dist * max_dist;
+  for (auto &i : slab)
+  {
+    double best = max_dist_sqr;
+    int best_k = -1;
+    for (size_t j = 0; j < chain_pos.size(); j++)
+    {
+      const double d2 = (points_[i].pos - chain_pos[j]).squaredNorm();
+      if (d2 < best)
+      {
+        best = d2;
+        best_k = chain_cluster[j];
+      }
+    }
+    if (best_k >= 0)
+    {
+      shares[best_k].push_back(i);
+    }
+  }
+  return shares;
+}
+
+void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thickness, std::vector<std::vector<int>> &children, bool clip_tree, bool add_offshoots,
+                      const std::vector<int> *slab, double prior_radius)
 {
   const int par = sections_[sec_].parent;
+  std::vector<std::vector<int>> shares;
+  if (slab && params_->slab_sections && !clip_tree)
+  {
+    // a slab point is no further from its own chain than the far side of the branch (the prior under-reads)
+    shares = partitionSlab(clusters, *slab, 3.0 * prior_radius + 0.01);
+  }
   // find the maximum distance (to tip) for each cluster
   std::vector<double> max_distances(clusters.size(), 0.0);
   double maxmax = -1;
@@ -704,6 +777,11 @@ void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thic
         // we only specify the end points at this stage. They will therefore enter the
         // extract_from_ends block below when the sec_ for loop gets to their section
         new_node.ends = clusters[i];
+        new_node.slab.clear();
+        if (!shares.empty())
+        {
+          new_node.slab = shares[i];
+        }
 
         if (clip_tree)
         {
@@ -778,6 +856,10 @@ void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thic
   {
     sections_[sec_].roots = main_roots;
   }
+  if (!shares.empty())
+  {
+    sections_[sec_].slab = shares[maxi];
+  }
   if (par > -1)
   {
     sections_[sec_].radius_scale *= max_distances[maxi] / std::sqrt(total_area); // reduce branch radius due to the split
@@ -832,7 +914,75 @@ Eigen::Vector3d Trees::calculateTipFromVertices(const std::vector<int> &vertices
   return tip;
 }
 
-Eigen::Vector3d Trees::vectorToCylinderCentre(const std::vector<int> &nodes, const Eigen::Vector3d &dir) const
+// Gauss-Newton on the geometric circle fit sum_i w_i (|q_i - c| - rho)^2 + w_p (rho - r0)^2, from the algebraic
+// (Kasa) centre. The algebraic fit is pulled toward the visible arc when the noise is a sizeable part of the
+// radius (one-sided, thin branches); the geometric one isn't. Huber weights shed foliage; the radius prior
+// (worth a tenth of the points, and bounded to 0.5-3 r0) stops a short noisy arc's radius running away;
+// each step is bounded by one radius, as the algebraic step is.
+static Eigen::Vector2d geometricCircleCentre(const std::vector<Eigen::Vector3d> &ps, Eigen::Vector2d c,
+                                             double approx_rad_sqr, double r0)
+{
+  const double n = static_cast<double>(ps.size());
+  const double max_step = std::sqrt(approx_rad_sqr);
+  const double max_shift = 2.0 * std::max(max_step, r0);
+  double rho = 0.0;
+  for (const auto &p : ps)
+  {
+    rho += (Eigen::Vector2d(p[0], p[1]) - c).norm();
+  }
+  rho /= n;
+  const double w_p = r0 > 0.0 ? 0.1 * n : 0.0;
+  if (r0 > 0.0)
+  {
+    rho = std::max(0.5 * r0, std::min(rho, 3.0 * r0));
+  }
+  for (int it = 0; it < 8; it++)
+  {
+    const double k = std::max(0.003, 0.25 * rho);  // Huber threshold
+    Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+    Eigen::Vector3d g = Eigen::Vector3d::Zero();
+    for (const auto &p : ps)
+    {
+      const Eigen::Vector2d v = Eigen::Vector2d(p[0], p[1]) - c;
+      const double d = std::max(v.norm(), 1e-9);
+      const double res = d - rho;
+      const double w = std::abs(res) <= k ? 1.0 : k / std::abs(res);
+      const Eigen::Vector3d J(-v[0] / d, -v[1] / d, -1.0);
+      H += w * J * J.transpose();
+      g += w * J * res;
+    }
+    H(2, 2) += w_p;
+    g[2] += w_p * (rho - r0);
+    H += 1e-12 * Eigen::Matrix3d::Identity();
+    const Eigen::Vector3d delta = -H.ldlt().solve(g);
+    if (!delta.allFinite())
+    {
+      break;
+    }
+    Eigen::Vector2d dc(delta[0], delta[1]);
+    if (dc.norm() > max_step)
+    {
+      dc *= max_step / dc.norm();
+    }
+    c += dc;
+    if (c.norm() > max_shift)
+    {
+      c *= max_shift / c.norm();
+    }
+    rho = std::max(rho + delta[2], 0.25 * max_step);
+    if (r0 > 0.0)
+    {
+      rho = std::max(0.5 * r0, std::min(rho, 3.0 * r0));
+    }
+    if (dc.norm() < 1e-5)
+    {
+      break;
+    }
+  }
+  return c;
+}
+
+Eigen::Vector3d Trees::vectorToCylinderCentre(const std::vector<int> &nodes, const Eigen::Vector3d &dir, double prior_radius) const
 {
 #define REAL_CENTROID  // finds a new centroid that is robust to branches scanned from a single side
 #if defined REAL_CENTROID
@@ -891,6 +1041,12 @@ Eigen::Vector3d Trees::vectorToCylinderCentre(const std::vector<int> &nodes, con
         shift *= std::sqrt(approx_rad_sqr / shift2);
       }
 
+      // trunk girth bands (no radius prior) stay on the algebraic fit: without a prior the geometric fit gave
+      // flared or fused trunks bigger girth votes, raising the whole tree's taper (3dtrees research 54)
+      if (params_->geometric_centre && prior_radius > 0.0)
+      {
+        shift = geometricCircleCentre(ps, shift, approx_rad_sqr, prior_radius);
+      }
       // apply the plane parameters as a world-space shift in the branch section tip position
       return ax1 * shift[0] + ax2 * shift[1];
     }
@@ -1312,6 +1468,36 @@ bool Trees::save(const std::string &filename, const Eigen::Vector3d &offset, boo
       }
     }
     ofs << std::endl;
+  }
+  const char *votes = std::getenv("RCT_VOTES");
+  if (votes && votes[0] == '1')  // diagnostics: per written segment, its radius vote and its tree's taper
+  {
+    std::ofstream vfs((filename + ".votes").c_str(), std::ios::out);
+    vfs << std::setprecision(6);
+    vfs << "tree,seg,measured_radius,accuracy,junction_weight,weight,n_nodes,from_ends,tree_taper,tree_weight,mean_taper,tree_height" << std::endl;
+    int tree = 0;
+    for (size_t sec = 0; sec < sections_.size(); sec++)
+    {
+      const auto &section = sections_[sec];
+      if (section.parent >= 0 || section.children.empty())
+      {
+        continue;
+      }
+      std::vector<int> list = {static_cast<int>(sec)};
+      for (size_t c = 0; c < list.size(); c++)
+      {
+        const BranchSection &node = sections_[list[c]];
+        vfs << tree << "," << c << "," << node.measured_radius << "," << node.accuracy << "," << node.junction_weight << ","
+            << node.weight << "," << node.n_nodes << "," << node.from_ends << ","
+            << section.total_taper / section.total_weight << "," << section.total_weight << "," << meanTaper(section) << ","
+            << section.tree_height << std::endl;
+        for (auto i : node.children)
+        {
+          list.push_back(i);
+        }
+      }
+      tree++;
+    }
   }
   return true;
 }

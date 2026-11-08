@@ -331,6 +331,8 @@ std::vector<std::vector<int>> getRootsAndSegment(std::vector<Vertex> &points, co
   }
   // convert the ground mesh to an easy look-up height field
   Eigen::ArrayXXd lowfield;
+  // pad the grid so a point on box_max indexes inside it (csiro #48); after the seeds are chosen, so they don't change
+  box_max += 0.0001 * Eigen::Vector3d(1, 1, 1);
   mesh.toHeightField(lowfield, box_min, box_max, pixel_width);
 
   // set heightfield as the height of the canopy above the ground
