@@ -7,6 +7,7 @@
 #include <nabo/nabo.h>
 #include "rayclusters.h"
 #include <cstdlib>
+#include <sstream>
 
 namespace ray
 {
@@ -36,6 +37,7 @@ TreesParams::TreesParams()
   , trunk_splits(2)
   , geometric_centre(false)
   , slab_sections(false)
+  , export_sections(false)
 {}
 
 /// The main reconstruction algorithm
@@ -94,8 +96,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     double girth_height = params_->girth_height_ratio * tree_height; // sections_[sec_].max_distance_to_end;
     double estimated_radius = 1e10;
     double best_dist = 0.0;
-    Eigen::Vector3d best_tip;
-    
+    Eigen::Vector3d best_tip, best_centroid;
+
     std::vector<int> best_nodes;
     std::vector<int> best_ends;
     for (int j = 1; j<=3; j++)
@@ -126,6 +128,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
       }
       // shift to cylinder's centre
       Eigen::Vector3d up(0,0,1);
+      const Eigen::Vector3d centroid = sections_[sec_].tip;
       sections_[sec_].tip += vectorToCylinderCentre(nodes, up);
       // now find the segment radius
       double accuracy;
@@ -146,6 +149,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
         estimated_radius = radius;
         best_dist = max_dist;
         best_tip = sections_[sec_].tip;
+        best_centroid = centroid;
         best_nodes = nodes;
         best_ends = sections_[sec_].ends;
       }
@@ -202,6 +206,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     sections_[sec_].trunk_z = best_tip[2];
     sections_[sec_].measured_radius = estimated_radius;
     sections_[sec_].n_nodes = (int)best_nodes.size();
+    recordSection(estimated_radius, best_accuracy, (int)best_nodes.size(), 0, best_centroid, Eigen::Vector3d(0, 0, 1));
   }
   if (verbose)
   {
@@ -281,6 +286,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     }
     // estimate the section's tip (the centre of the cylinder of points)
     sections_[sec_].tip = calculateTipFromVertices(nodes);
+    const Eigen::Vector3d centroid = sections_[sec_].tip;
     // get section's direction
     Eigen::Vector3d dir = par >= 0 ? (sections_[sec_].tip - sections_[par].tip).normalized() : Eigen::Vector3d(0, 0, 1);
     // shift to cylinder's centre
@@ -295,6 +301,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     sections_[sec_].measured_radius = rad;
     sections_[sec_].n_nodes = (int)nodes.size();
     sections_[sec_].from_ends = extract_from_ends ? 1 : 0;
+    recordSection(rad, accuracy, (int)nodes.size(), extract_from_ends ? 1 : 0, centroid, dir);
 
     // now add the single child for this particular tree node, assuming there are still ends
     if (sections_[sec_].ends.size() > 0)
@@ -603,7 +610,18 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
 
   // cluster these end points based on two separation criteria (gap_ratio and span_ratio)
   std::vector<std::vector<int>> clusters;
+  SplitTest *test = nullptr;
+  if (params_->export_sections)
+  {
+    split_tests_.push_back(SplitTest{ sec_, sections_[sec_].split_count, thickness, gap, span, ps, v_indices, {}, {} });
+    test = &split_tests_.back();
+  }
   generateClusters(clusters, ps, gap, span);
+  if (test)
+  {
+    test->clusters = clusters;
+    test->removed.assign(clusters.size(), 0);
+  }
   // adjust back to global ids
   for (auto &cluster : clusters)
   {
@@ -626,6 +644,10 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
       }
       if (max_dist < params_->height_min)
       {
+        for (size_t k = 0; test && k < test->clusters.size(); k++)
+        {
+          test->removed[k] |= test->ids[test->clusters[k][0]] == clusters[i][0] ? 1 : 0;
+        }
         clusters[i] = clusters.back();
         clusters.pop_back();
         points_removed = true;
@@ -1231,6 +1253,11 @@ void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector
           ends.push_back(c);
         }
       }
+      if (params_->export_sections)
+      {
+        beyond_tip_.resize(sections_.size());
+        beyond_tip_[sec_] = ends;
+      }
     }
     for (auto &node : nodes)
     {
@@ -1258,6 +1285,10 @@ void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector
         section_ids[i] = section_ids[j];
       }
     }
+  }
+  if (params_->export_sections)
+  {
+    point_section_ids_ = section_ids;
   }
 }
 
@@ -1337,6 +1368,10 @@ void Trees::segmentCloud(Cloud &cloud, std::vector<int> &root_segs, const std::v
     contiguous_section_ids_[sec] = num_trees++;
   }
 
+  if (params_->export_sections)
+  {
+    ray_section_ids_.assign(cloud.ends.size(), -1);
+  }
   int j = -1;
   for (size_t i = 0; i < cloud.ends.size(); i++)
   {
@@ -1345,6 +1380,11 @@ void Trees::segmentCloud(Cloud &cloud, std::vector<int> &root_segs, const std::v
     {
       j++;
       int seg = section_ids[j];
+      // the raw ownership, before the trunk cone below; only sections of written trees
+      if (params_->export_sections && seg != -1 && !sections_[sections_[seg].root].children.empty())
+      {
+        ray_section_ids_[i] = contiguous_section_ids_[seg];
+      }
       const int root_id = points_[j].root;
       root_segs[i] = root_id == -1 ? -1 : section_ids[root_id];
 
@@ -1415,8 +1455,185 @@ void Trees::removeOutOfBoundRays(Cloud &cloud, const Eigen::Vector3d &min_bound,
       cloud.colours.pop_back();
       cloud.times[i] = cloud.times.back();
       cloud.times.pop_back();
+      if (!ray_section_ids_.empty())
+      {
+        ray_section_ids_[i] = ray_section_ids_.back();
+        ray_section_ids_.pop_back();
+      }
     }
   }
+}
+
+void Trees::recordSection(double rad, double accuracy, int n_nodes, int from_ends, const Eigen::Vector3d &centroid,
+                          const Eigen::Vector3d &dir)
+{
+  if (!params_->export_sections)
+  {
+    return;
+  }
+  records_.resize(sections_.size());
+  SectionRecord &r = records_[sec_];
+  r.measured = true;
+  r.rad = rad;
+  r.accuracy = accuracy;
+  r.n_nodes = n_nodes;
+  r.from_ends = from_ends;
+  r.centroid = centroid;
+  r.centre = sections_[sec_].tip;
+  r.dir = dir;
+}
+
+// --export_sections: what the fit measured and decided, beside _trees.txt and joined to it by (tree, seg)
+bool Trees::saveSections(const std::string &stub, const Eigen::Vector3d &offset) const
+{
+  if (!params_->export_sections)
+  {
+    return false;
+  }
+  auto written = [&](int sec) { return sec >= 0 && !sections_[sections_[sec].root].children.empty(); };
+  auto key = [&](int sec) {  // tree, seg (the segment's index in its _trees.txt line), section_id
+    std::ostringstream s;
+    if (written(sec))
+      s << contiguous_section_ids_[sections_[sec].root] << "," << sections_[sec].id << "," << contiguous_section_ids_[sec];
+    else
+      s << "-1,-1,-1";
+    return s.str();
+  };
+  auto pos = [&](std::ostream &o, const Eigen::Vector3d &p, const Eigen::Vector3d &off) {
+    o << std::fixed << std::setprecision(4) << p[0] + off[0] << "," << p[1] + off[1] << "," << p[2] + off[2]
+      << std::defaultfloat << std::setprecision(6);
+  };
+  // the sections of each written tree in _trees.txt order: the root, then its descendants breadth first
+  std::vector<int> order;
+  for (size_t sec = 0; sec < sections_.size(); sec++)
+  {
+    if (sections_[sec].parent >= 0 || !written(static_cast<int>(sec)))
+    {
+      continue;
+    }
+    size_t first = order.size();
+    order.push_back(static_cast<int>(sec));
+    for (size_t c = first; c < order.size(); c++)
+    {
+      order.insert(order.end(), sections_[order[c]].children.begin(), sections_[order[c]].children.end());
+    }
+  }
+  std::vector<int> last_test(sections_.size(), -1), n_tests(sections_.size(), 0);
+  for (size_t t = 0; t < split_tests_.size(); t++)
+  {
+    last_test[split_tests_[t].sec] = static_cast<int>(t);
+    n_tests[split_tests_[t].sec]++;
+  }
+
+  std::ofstream ofs((stub + "_sections.txt").c_str(), std::ios::out);
+  ofs << "# Sections, one per _trees.txt segment in the same order: tree,seg join to _trees.txt (seg = index in the "
+         "tree's line), section_id = its section_id column = the ids in _sections.bin. rad: the measured radius (power "
+         "mean); centroid: the section's points' centroid, centre: after the centre step; reach: graph distance to "
+         "the farthest tip; split_*: the last split test at the section's top (clusters: end points per cluster)"
+      << std::endl;
+  ofs << "tree,seg,section_id,parent_seg,measured,rad,accuracy,n_nodes,from_ends,centroid_x,centroid_y,centroid_z,"
+         "centre_x,centre_y,centre_z,dir_x,dir_y,dir_z,reach,radius_scale,split_tests,split_gap,split_span,split_ends,"
+         "split_removed,split_clusters"
+      << std::endl;
+  ofs << std::setprecision(6);
+  const SectionRecord none{};
+  for (const int sec : order)
+  {
+    const BranchSection &s = sections_[sec];
+    const SectionRecord &r = sec < static_cast<int>(records_.size()) ? records_[sec] : none;
+    ofs << key(sec) << "," << (s.parent >= 0 ? sections_[s.parent].id : -1) << "," << r.measured << "," << r.rad << ","
+        << r.accuracy << "," << r.n_nodes << "," << r.from_ends << ",";
+    pos(ofs, r.centroid, offset);
+    ofs << ",";
+    pos(ofs, r.centre, offset);
+    ofs << "," << r.dir[0] << "," << r.dir[1] << "," << r.dir[2] << "," << s.max_distance_to_end << "," << s.radius_scale
+        << "," << n_tests[sec];
+    if (last_test[sec] >= 0)
+    {
+      const SplitTest &t = split_tests_[last_test[sec]];
+      int removed = 0;
+      for (auto &rm : t.removed) removed += rm;
+      ofs << "," << t.gap << "," << t.span << "," << t.ps.size() << "," << removed << ",";
+      for (size_t k = 0; k < t.clusters.size(); k++)
+      {
+        ofs << (k ? " " : "") << t.clusters[k].size();
+      }
+    }
+    else
+    {
+      ofs << ",0,0,0,0,";
+    }
+    ofs << std::endl;
+  }
+
+  // per ray of the cloud, in cloud order: the section_id that owns it (calculateSectionIds), -1 for none
+  std::ofstream bin((stub + "_sections.bin").c_str(), std::ios::binary);
+  for (const int id : ray_section_ids_)
+  {
+    const int32_t v = id;
+    bin.write(reinterpret_cast<const char *>(&v), sizeof(v));
+  }
+
+  std::ofstream mfs((stub + "_modules.txt").c_str(), std::ios::out);
+  mfs << "# Per tip (childless section): the points the ownership assigns past its end points, i.e. the ends and "
+         "everything above them on the shortest-path graph. n_ends: of those, the end points; mean and cov (population, "
+         "m^2) of their positions; top_z: the highest; reach: graph distance from the ends to the farthest tip"
+      << std::endl;
+  mfs << "tree,seg,section_id,n,n_ends,mean_x,mean_y,mean_z,cov_xx,cov_xy,cov_xz,cov_yy,cov_yz,cov_zz,top_z,reach"
+      << std::endl;
+  mfs << std::setprecision(6);
+  for (const int sec : order)
+  {
+    if (!sections_[sec].children.empty())
+    {
+      continue;
+    }
+    std::vector<int> pts;
+    if (sec < static_cast<int>(beyond_tip_.size()))
+    {
+      for (const int p : beyond_tip_[sec])
+      {
+        if (point_section_ids_[p] == sec)
+        {
+          pts.push_back(p);
+        }
+      }
+    }
+    int n_ends = 0;
+    double reach = 0.0;
+    for (const int e : sections_[sec].ends)
+    {
+      n_ends += point_section_ids_[e] == sec ? 1 : 0;
+      reach = std::max(reach, points_[e].distance_to_end);
+    }
+    mfs << key(sec) << "," << pts.size() << "," << n_ends << ",";
+    if (pts.empty())
+    {
+      mfs << "nan,nan,nan,nan,nan,nan,nan,nan,nan,nan," << reach << std::endl;
+      continue;
+    }
+    Eigen::Vector3d mean(0, 0, 0);
+    double top = -1e10;
+    for (const int p : pts)
+    {
+      mean += points_[p].pos;
+      top = std::max(top, points_[p].pos[2]);
+    }
+    mean /= static_cast<double>(pts.size());
+    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+    for (const int p : pts)
+    {
+      const Eigen::Vector3d d = points_[p].pos - mean;
+      cov += d * d.transpose();
+    }
+    cov /= static_cast<double>(pts.size());
+    pos(mfs, mean, offset);
+    mfs << "," << cov(0, 0) << "," << cov(0, 1) << "," << cov(0, 2) << "," << cov(1, 1) << "," << cov(1, 2) << ","
+        << cov(2, 2) << "," << std::fixed << std::setprecision(4) << top + offset[2] << std::defaultfloat
+        << std::setprecision(6) << "," << reach << std::endl;
+  }
+
+  return ofs.good() && bin.good() && mfs.good();
 }
 
 // save the structure to a text file
