@@ -72,31 +72,18 @@ public:
   bool saveSections(const std::string &stub, const Eigen::Vector3d &offset) const;
 
 private:
-  /// what one section's fit measured (export_sections), indexed by section
-  struct SectionRecord
+  /// a tip's module (export_sections): the points calculateSectionIds assigns past its ends, summarised
+  struct Module
   {
-    bool measured{false};
-    double rad{0}, accuracy{0};
-    int n_nodes{0}, from_ends{0};
-    Eigen::Vector3d centroid{0, 0, 0}, centre{0, 0, 0}, dir{0, 0, 0};
+    int n{0}, n_ends{0};  // the points, and of them the tip's own end points
+    Eigen::Vector3d mean{0, 0, 0};
+    Eigen::Matrix3d cov{Eigen::Matrix3d::Zero()};  // population covariance of their positions
+    double top{0}, reach{0};  // the highest z; graph distance from the owned ends to the farthest tip
   };
-  /// one split test (export_sections): the end points clustered and the agglomeration's clusters
-  struct SplitTest
-  {
-    int sec, attempt;
-    double thickness, gap, span;
-    std::vector<Eigen::Vector3d> ps;         // the clustered end points (on the section's top boundary)
-    std::vector<int> ids;                    // their points
-    std::vector<std::vector<int>> clusters;  // the agglomeration's clusters, as indices into ps, before any removal
-    std::vector<int> removed;                // 1 for clusters dropped as shorter than height_min (trunks)
-  };
-  void recordSection(double rad, double accuracy, int n_nodes, int from_ends, const Eigen::Vector3d &centroid,
-                     const Eigen::Vector3d &dir);
-  std::vector<SectionRecord> records_;
-  std::vector<SplitTest> split_tests_;
-  std::vector<std::vector<int>> beyond_tip_;  // per childless section, the points calculateSectionIds assigns past its ends
-  std::vector<int> point_section_ids_;        // calculateSectionIds' ownership, per point
-  std::vector<int> ray_section_ids_;          // the same per ray of the cloud (contiguous ids), -1 for none
+  /// summarise the module of each tip from the final ownership and each tip's points past its ends
+  void summariseModules(const std::vector<int> &section_ids, const std::vector<std::vector<int>> &beyond);
+  std::vector<Module> modules_;        // per section, set for tips (export_sections)
+  std::vector<int> ray_section_ids_;   // calculateSectionIds' ownership per ray of the cloud (contiguous ids), -1 for none
 
   /// The piecewise cylindrical represenation of all of the trees
   std::vector<BranchSection> sections_;
@@ -134,7 +121,8 @@ private:
   /// add a new section to continue reconstructing the branch
   void addChildSection();
   /// calculate the ownership, what branch section does each point belong to
-  void calculateSectionIds(std::vector<int> &section_ids, const std::vector<std::vector<int>> &children);
+  void calculateSectionIds(std::vector<int> &section_ids, const std::vector<std::vector<int>> &children,
+                           std::vector<std::vector<int>> *beyond = nullptr);
   /// set ids that are locel (0-based) per tree
   void generateLocalSectionIds();
   /// if using an overlapping grid, then remove trees with base outside the non-overlapping cell bounds
@@ -218,6 +206,14 @@ struct RAYLIB_EXPORT BranchSection
   double measured_radius{0};  // the radius vote's measured radius, for diagnostics
   int n_nodes{0};  // points the section was fitted on, for diagnostics
   int from_ends{0};  // 1 if fitted after a split
+  Eigen::Vector3d centroid{0, 0, 0};  // the fitted points' centroid, before the centre step (for diagnostics)
+  struct SplitTest  // the last split test at this section's top, for diagnostics (a split's new sections start empty)
+  {
+    int tests{0};             // split tests run here
+    double gap{0}, span{0};   // the last one's thresholds
+    int ends{0}, removed{0};  // the end points it clustered, and the clusters it dropped as too short (trunks)
+    std::vector<int> clusters;  // each cluster's size in end points, before dropping any
+  } split;
 };
 
 /// Converts an index in to a unique colour
