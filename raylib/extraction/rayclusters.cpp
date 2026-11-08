@@ -11,7 +11,7 @@ namespace ray
 // take the input points and separate into clusters based on a minimum and maximum separation diameter criterion
 // this is a form of agglomerative clustering
 void clustersAgglomerate(const std::vector<Eigen::Vector3d> &points, double min_diameter, double max_diameter,
-                         std::vector<std::vector<int>> &point_clusters)
+                         std::vector<std::vector<int>> &point_clusters, std::vector<ClusterLink> *links)
 {
   // 1. get nearest neighbours for each point
   const int search_size = std::min(8, static_cast<int>(points.size()) - 1);
@@ -80,6 +80,11 @@ void clustersAgglomerate(const std::vector<Eigen::Vector3d> &points, double min_
     Eigen::Vector3d maxb = maxVector(clusters[cl1].max_bound, clusters[cl2].max_bound);
     Eigen::Vector3d dims = maxb - minb;
     double diam = std::max(dims[0], std::max(dims[1], dims[2]));
+    if (links)
+    {
+      links->push_back({ node.id1, node.id2, static_cast<int>(clusters[cl1].ids.size()),
+                         static_cast<int>(clusters[cl2].ids.size()), std::sqrt(node.dist2), diam, diam < max_diameter });
+    }
     if (diam < max_diameter)  // then merge
     {
       const int first = std::min(cl1, cl2);
@@ -106,7 +111,7 @@ void clustersAgglomerate(const std::vector<Eigen::Vector3d> &points, double min_
 
 /// generate clusters from the set of points, with optional debug rending of the output
 void generateClusters(std::vector<std::vector<int>> &point_clusters, const std::vector<Eigen::Vector3d> &points,
-                      double min_diameter, double max_diameter)
+                      double min_diameter, double max_diameter, std::vector<ClusterLink> *links)
 {
   // corner cases
   if (points.size() == 1)
@@ -118,7 +123,7 @@ void generateClusters(std::vector<std::vector<int>> &point_clusters, const std::
     return;
   }
 
-  clustersAgglomerate(points, min_diameter, max_diameter, point_clusters);
+  clustersAgglomerate(points, min_diameter, max_diameter, point_clusters, links);
 }
 
 

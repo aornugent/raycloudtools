@@ -68,7 +68,7 @@ void usage(int exit_code = 1)
     std::cout << "                            --stem_taper 0       - (-t) radii also taper along each path as (distance to tips / at the base)^this; 0 is constant between forks" << std::endl;
     std::cout << "                            --geometric_centre   - (-C) iterate a geometric circle fit (radius prior) after the algebraic centre step" << std::endl;
     std::cout << "                            --slab_sections      - (-L) fit sections made by a split on their share of the slab of points, not the path chains" << std::endl;
-    std::cout << "                            --export_sections    - (-E) also write _sections.txt, _sections.bin (section id per ray) and _modules.txt" << std::endl;
+    std::cout << "                            --export_sections    - (-E) also write _sections.txt, _sections.bin (section id per ray), _modules.txt and _alternatives.txt" << std::endl;
     std::cout << "                            --gravity_factor 0.3 - (-f) larger values preference vertical trees" << std::endl;
     std::cout << "                            --branch_segmentation- (-b) _segmented.ply is per branch segment" << std::endl;
     std::cout << "                            --grid_width 10      - (-w) crops results assuming cloud has been gridded with given width" << std::endl;

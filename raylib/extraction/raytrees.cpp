@@ -7,6 +7,7 @@
 #include <nabo/nabo.h>
 #include "rayclusters.h"
 #include <cstdlib>
+#include <map>
 #include <sstream>
 
 namespace ray
@@ -177,13 +178,16 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
       double span = (params_->trunk_span_ratio > 0.0 ? params_->trunk_span_ratio : params_->span_ratio) * estimated_radius;
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
 
+      const size_t first_new = sections_.size();
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)
       {
         sections_[sec_].split_count++;
         bifurcate(clusters, thickness, children, true, true);
+        recordSplitOutcome(first_new);
         sec_--;
         continue;
       }
+      recordSplitOutcome(first_new);
     }
     if (verbose)
     {
@@ -264,6 +268,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
       double span = params_->span_ratio * span_rad; // span thershold for splitting
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
 
+      const size_t first_new = sections_.size();
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)
       {
         extract_from_ends = true; // don't trust the found nodes as it is now two separate tree nodes
@@ -272,6 +277,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
         // otherwise it creates new branch sections_ for each cluster and adds to the end of the sections_ list
         bifurcate(clusters, thickness, children, false, add_offshoots, &nodes, span_rad);
       }
+      recordSplitOutcome(first_new);
     }
 
     if (extract_from_ends) // we have split the ends, so we need to extract the set of nodes in a backwards manner
@@ -613,10 +619,10 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
   SplitTest *test = nullptr;
   if (params_->export_sections)
   {
-    split_tests_.push_back(SplitTest{ sec_, sections_[sec_].split_count, thickness, gap, span, ps, v_indices, {}, {} });
+    split_tests_.push_back(SplitTest{ sec_, sections_[sec_].split_count, thickness, gap, span, ps, v_indices, {}, {}, {}, {} });
     test = &split_tests_.back();
   }
-  generateClusters(clusters, ps, gap, span);
+  generateClusters(clusters, ps, gap, span, test ? &test->links : nullptr);
   if (test)
   {
     test->clusters = clusters;
@@ -1483,6 +1489,32 @@ void Trees::recordSection(double rad, double accuracy, int n_nodes, int from_end
   r.dir = dir;
 }
 
+// after a split test at sec_: the section each of its clusters became (sec_ keeps one, new ones are appended
+// from first_new), found by the cluster's first end point, which bifurcate puts in that section's ends
+void Trees::recordSplitOutcome(size_t first_new)
+{
+  if (!params_->export_sections)
+  {
+    return;
+  }
+  SplitTest &test = split_tests_.back();
+  test.outcome.assign(test.clusters.size(), -1);
+  for (size_t k = 0; k < test.clusters.size(); k++)
+  {
+    const int end = test.ids[test.clusters[k][0]];
+    for (size_t s = first_new; s <= sections_.size() && !test.removed[k]; s++)
+    {
+      const int sec = s == first_new ? sec_ : static_cast<int>(s - 1);
+      const std::vector<int> &ends = sections_[sec].ends;
+      if (std::find(ends.begin(), ends.end(), end) != ends.end())
+      {
+        test.outcome[k] = sec;
+        break;
+      }
+    }
+  }
+}
+
 // --export_sections: what the fit measured and decided, beside _trees.txt and joined to it by (tree, seg)
 bool Trees::saveSections(const std::string &stub, const Eigen::Vector3d &offset) const
 {
@@ -1633,7 +1665,79 @@ bool Trees::saveSections(const std::string &stub, const Eigen::Vector3d &offset)
         << std::setprecision(6) << "," << reach << std::endl;
   }
 
-  return ofs.good() && bin.good() && mfs.good();
+  std::ofstream afs((stub + "_alternatives.txt").c_str(), std::ios::out);
+  afs << "# Split tests, in the order run: tree,seg,section_id of the section tested (trunk tests repeat, attempt "
+         "0,1,..). The end points crossing its top (n_ends) are linked to neighbours within gap and merged in order of "
+         "link length while the merged box (max side) stays under span. clusters: per final cluster "
+         "n:box:reach:tree:seg (the section it became, -1:-1 if dropped); merges: dist:box:na:nb per merge, in order; "
+         "links: i:j:dist:box per pair of clusters linked within gap but refused, the shortest link and the box of their union"
+      << std::endl;
+  afs << "tree,seg,section_id,trunk,attempt,thickness,gap,span,n_ends,clusters,merges,links" << std::endl;
+  afs << std::setprecision(5);
+  for (const SplitTest &t : split_tests_)
+  {
+    if (!written(t.sec))
+    {
+      continue;
+    }
+    std::vector<int> cluster_of(t.ps.size(), -1);
+    std::vector<Eigen::Vector3d> lo, hi;
+    for (size_t k = 0; k < t.clusters.size(); k++)
+    {
+      lo.push_back(t.ps[t.clusters[k][0]]);
+      hi.push_back(lo.back());
+      for (const int i : t.clusters[k])
+      {
+        cluster_of[i] = static_cast<int>(k);
+        lo[k] = minVector(lo[k], t.ps[i]);
+        hi[k] = maxVector(hi[k], t.ps[i]);
+      }
+    }
+    auto box = [](const Eigen::Vector3d &a, const Eigen::Vector3d &b) { return (b - a).maxCoeff(); };
+    afs << key(t.sec) << "," << (sections_[t.sec].parent == -1) << "," << t.attempt << "," << t.thickness << ","
+        << t.gap << "," << t.span << "," << t.ps.size() << ",";
+    for (size_t k = 0; k < t.clusters.size(); k++)
+    {
+      double reach = 0.0;
+      for (const int i : t.clusters[k])
+      {
+        reach = std::max(reach, points_[t.ids[i]].distance_to_end);
+      }
+      const int out = t.outcome.empty() ? -1 : t.outcome[k];
+      std::string k2 = written(out) ? key(out) : "-1,-1,-1";
+      std::replace(k2.begin(), k2.end(), ',', ':');
+      k2 = k2.substr(0, k2.rfind(':'));  // tree:seg
+      afs << (k ? " " : "") << t.clusters[k].size() << ":" << box(lo[k], hi[k]) << ":" << reach << ":" << k2;
+    }
+    afs << ",";
+    bool first = true;
+    std::map<std::pair<int, int>, double> refused;  // cluster pair -> shortest refused link
+    for (const ClusterLink &l : t.links)
+    {
+      if (l.merged)
+      {
+        afs << (first ? "" : " ") << l.dist << ":" << l.box << ":" << l.na << ":" << l.nb;
+        first = false;
+        continue;
+      }
+      const std::pair<int, int> p(std::min(cluster_of[l.a], cluster_of[l.b]), std::max(cluster_of[l.a], cluster_of[l.b]));
+      if (p.first != p.second && !refused.count(p))
+      {
+        refused[p] = l.dist;  // links come in increasing length
+      }
+    }
+    afs << ",";
+    first = true;
+    for (const auto &r : refused)
+    {
+      const int a = r.first.first, b = r.first.second;
+      afs << (first ? "" : " ") << a << ":" << b << ":" << r.second << ":"
+          << box(minVector(lo[a], lo[b]), maxVector(hi[a], hi[b]));
+      first = false;
+    }
+    afs << std::endl;
+  }
+  return ofs.good() && bin.good() && mfs.good() && afs.good();
 }
 
 // save the structure to a text file

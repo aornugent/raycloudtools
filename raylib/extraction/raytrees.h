@@ -11,6 +11,7 @@
 #include "../rayutils.h"
 #include "raylib/raylibconfig.h"
 #include "raysegment.h"
+#include "rayclusters.h"
 
 namespace ray
 {
@@ -68,7 +69,7 @@ public:
   bool save(const std::string &filename, const Eigen::Vector3d &offset, bool verbose) const;
   /// write one line per tree (in _trees.txt order) with its taper blend and measured trunk radius
   bool saveTaper(const std::string &filename, const Eigen::Vector3d &offset) const;
-  /// with params.export_sections: write <stub>_sections.txt, _sections.bin and _modules.txt
+  /// with params.export_sections: write <stub>_sections.txt, _sections.bin, _modules.txt and _alternatives.txt
   bool saveSections(const std::string &stub, const Eigen::Vector3d &offset) const;
 
 private:
@@ -80,7 +81,7 @@ private:
     int n_nodes{0}, from_ends{0};
     Eigen::Vector3d centroid{0, 0, 0}, centre{0, 0, 0}, dir{0, 0, 0};
   };
-  /// one split test (export_sections): the end points clustered and the agglomeration's clusters
+  /// one split test (export_sections): the end points clustered, the agglomeration and what each cluster became
   struct SplitTest
   {
     int sec, attempt;
@@ -89,9 +90,12 @@ private:
     std::vector<int> ids;                    // their points
     std::vector<std::vector<int>> clusters;  // the agglomeration's clusters, as indices into ps, before any removal
     std::vector<int> removed;                // 1 for clusters dropped as shorter than height_min (trunks)
+    std::vector<int> outcome;                // the section each cluster became, -1 if none
+    std::vector<ClusterLink> links;
   };
   void recordSection(double rad, double accuracy, int n_nodes, int from_ends, const Eigen::Vector3d &centroid,
                      const Eigen::Vector3d &dir);
+  void recordSplitOutcome(size_t first_new);
   std::vector<SectionRecord> records_;
   std::vector<SplitTest> split_tests_;
   std::vector<std::vector<int>> beyond_tip_;  // per childless section, the points calculateSectionIds assigns past its ends
