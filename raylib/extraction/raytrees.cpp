@@ -1041,7 +1041,9 @@ Eigen::Vector3d Trees::vectorToCylinderCentre(const std::vector<int> &nodes, con
         shift *= std::sqrt(approx_rad_sqr / shift2);
       }
 
-      if (params_->geometric_centre)
+      // trunk girth bands (no radius prior) stay on the algebraic fit: without a prior the geometric fit gave
+      // flared or fused trunks bigger girth votes, raising the whole tree's taper (3dtrees research 54)
+      if (params_->geometric_centre && prior_radius > 0.0)
       {
         shift = geometricCircleCentre(ps, shift, approx_rad_sqr, prior_radius);
       }
