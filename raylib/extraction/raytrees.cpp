@@ -36,6 +36,7 @@ TreesParams::TreesParams()
   , trunk_splits(2)
   , geometric_centre(false)
   , slab_sections(false)
+  , export_sections(false)
 {}
 
 /// The main reconstruction algorithm
@@ -126,6 +127,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
       }
       // shift to cylinder's centre
       Eigen::Vector3d up(0,0,1);
+      const Eigen::Vector3d centroid = sections_[sec_].tip;
       sections_[sec_].tip += vectorToCylinderCentre(nodes, up);
       // now find the segment radius
       double accuracy;
@@ -146,6 +148,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
         estimated_radius = radius;
         best_dist = max_dist;
         best_tip = sections_[sec_].tip;
+        sections_[sec_].centroid = centroid;
         best_nodes = nodes;
         best_ends = sections_[sec_].ends;
       }
@@ -281,6 +284,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     }
     // estimate the section's tip (the centre of the cylinder of points)
     sections_[sec_].tip = calculateTipFromVertices(nodes);
+    sections_[sec_].centroid = sections_[sec_].tip;
     // get section's direction
     Eigen::Vector3d dir = par >= 0 ? (sections_[sec_].tip - sections_[par].tip).normalized() : Eigen::Vector3d(0, 0, 1);
     // shift to cylinder's centre
@@ -305,7 +309,12 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
 
   // Now calculate the section ids for all of the points, for the segmented cloud
   std::vector<int> section_ids(points_.size(), -1);
-  calculateSectionIds(section_ids, children);
+  std::vector<std::vector<int>> beyond;  // per tip, its points past its ends (export_sections)
+  calculateSectionIds(section_ids, children, params_->export_sections ? &beyond : nullptr);
+  if (params_->export_sections)
+  {
+    summariseModules(section_ids, beyond);
+  }
 
   generateLocalSectionIds();
 
@@ -604,6 +613,17 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
   // cluster these end points based on two separation criteria (gap_ratio and span_ratio)
   std::vector<std::vector<int>> clusters;
   generateClusters(clusters, ps, gap, span);
+  BranchSection::SplitTest &test = sections_[sec_].split;  // record the test, for diagnostics (export_sections)
+  test.tests++;
+  test.gap = gap;
+  test.span = span;
+  test.ends = static_cast<int>(ps.size());
+  test.removed = 0;
+  test.clusters.clear();
+  for (const auto &cluster : clusters)
+  {
+    test.clusters.push_back(static_cast<int>(cluster.size()));
+  }
   // adjust back to global ids
   for (auto &cluster : clusters)
   {
@@ -626,6 +646,7 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
       }
       if (max_dist < params_->height_min)
       {
+        test.removed++;
         clusters[i] = clusters.back();
         clusters.pop_back();
         points_removed = true;
@@ -766,6 +787,7 @@ void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thic
         continue;
       }
       BranchSection new_node = sections_[sec_];
+      new_node.split = BranchSection::SplitTest();  // its own tests are yet to run
       new_node.max_distance_to_end = max_distances[i];
       new_node.radius_scale *= max_distances[i] / std::sqrt(total_area);
       if (par == -1)
@@ -1187,7 +1209,8 @@ void Trees::addChildSection()
 }
 
 // calculate what section every point belongs to
-void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector<std::vector<int>> &children)
+void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector<std::vector<int>> &children,
+                                std::vector<std::vector<int>> *beyond)
 {
   // first we initialise to one branch section per root
   for (size_t i = 0; i < sections_.size(); i++)
@@ -1230,6 +1253,11 @@ void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector
         {
           ends.push_back(c);
         }
+      }
+      if (beyond)
+      {
+        beyond->resize(sections_.size());
+        (*beyond)[sec_] = ends;
       }
     }
     for (auto &node : nodes)
@@ -1337,6 +1365,10 @@ void Trees::segmentCloud(Cloud &cloud, std::vector<int> &root_segs, const std::v
     contiguous_section_ids_[sec] = num_trees++;
   }
 
+  if (params_->export_sections)
+  {
+    ray_section_ids_.assign(cloud.ends.size(), -1);
+  }
   int j = -1;
   for (size_t i = 0; i < cloud.ends.size(); i++)
   {
@@ -1345,6 +1377,11 @@ void Trees::segmentCloud(Cloud &cloud, std::vector<int> &root_segs, const std::v
     {
       j++;
       int seg = section_ids[j];
+      // the raw ownership, before the trunk cone below; only sections of written trees
+      if (params_->export_sections && seg != -1 && !sections_[sections_[seg].root].children.empty())
+      {
+        ray_section_ids_[i] = contiguous_section_ids_[seg];
+      }
       const int root_id = points_[j].root;
       root_segs[i] = root_id == -1 ? -1 : section_ids[root_id];
 
@@ -1415,8 +1452,163 @@ void Trees::removeOutOfBoundRays(Cloud &cloud, const Eigen::Vector3d &min_bound,
       cloud.colours.pop_back();
       cloud.times[i] = cloud.times.back();
       cloud.times.pop_back();
+      if (!ray_section_ids_.empty())
+      {
+        ray_section_ids_[i] = ray_section_ids_.back();
+        ray_section_ids_.pop_back();
+      }
     }
   }
+}
+
+void Trees::summariseModules(const std::vector<int> &section_ids, const std::vector<std::vector<int>> &beyond)
+{
+  modules_.assign(sections_.size(), Module());
+  for (size_t sec = 0; sec < beyond.size(); sec++)
+  {
+    Module &m = modules_[sec];
+    std::vector<int> pts;  // its points past its ends that the final ownership keeps
+    for (const int p : beyond[sec])
+    {
+      if (section_ids[p] == static_cast<int>(sec))
+      {
+        pts.push_back(p);
+      }
+    }
+    for (const int e : sections_[sec].ends)
+    {
+      if (section_ids[e] == static_cast<int>(sec))
+      {
+        m.n_ends++;
+        m.reach = std::max(m.reach, points_[e].distance_to_end);
+      }
+    }
+    m.n = static_cast<int>(pts.size());
+    if (pts.empty())
+    {
+      continue;
+    }
+    m.top = -1e10;
+    for (const int p : pts)
+    {
+      m.mean += points_[p].pos;
+      m.top = std::max(m.top, points_[p].pos[2]);
+    }
+    m.mean /= static_cast<double>(pts.size());
+    for (const int p : pts)
+    {
+      const Eigen::Vector3d d = points_[p].pos - m.mean;
+      m.cov += d * d.transpose();
+    }
+    m.cov /= static_cast<double>(pts.size());
+  }
+}
+
+// --export_sections: what the fit measured and decided, beside _trees.txt and joined to it by (tree, seg)
+bool Trees::saveSections(const std::string &stub, const Eigen::Vector3d &offset) const
+{
+  if (!params_->export_sections)
+  {
+    return false;
+  }
+  std::ofstream ofs((stub + "_sections.txt").c_str(), std::ios::out);
+  std::ofstream bin((stub + "_sections.bin").c_str(), std::ios::binary);
+  std::ofstream mfs((stub + "_modules.txt").c_str(), std::ios::out);
+  auto opened = [&](const std::ofstream &f, const std::string &ext) {
+    if (!f.is_open())
+    {
+      std::cerr << "Error: cannot open " << stub + ext << " for writing." << std::endl;
+    }
+    return f.is_open();
+  };
+  if (!opened(ofs, "_sections.txt") || !opened(bin, "_sections.bin") || !opened(mfs, "_modules.txt"))
+  {
+    return false;
+  }
+  auto key = [&](int sec) {  // tree, seg (the segment's index in its _trees.txt line), section_id
+    return std::to_string(contiguous_section_ids_[sections_[sec].root]) + "," + std::to_string(sections_[sec].id) +
+           "," + std::to_string(contiguous_section_ids_[sec]);
+  };
+  auto pos = [&](std::ostream &o, const Eigen::Vector3d &p) {
+    o << std::fixed << std::setprecision(4) << p[0] + offset[0] << "," << p[1] + offset[1] << "," << p[2] + offset[2]
+      << std::defaultfloat << std::setprecision(6);
+  };
+  // the sections of each written tree in _trees.txt order: the root, then its descendants breadth first
+  std::vector<int> order;
+  for (size_t sec = 0; sec < sections_.size(); sec++)
+  {
+    if (sections_[sec].parent >= 0 || sections_[sec].children.empty())
+    {
+      continue;
+    }
+    size_t first = order.size();
+    order.push_back(static_cast<int>(sec));
+    for (size_t c = first; c < order.size(); c++)
+    {
+      order.insert(order.end(), sections_[order[c]].children.begin(), sections_[order[c]].children.end());
+    }
+  }
+
+  ofs << "# Sections, one per _trees.txt segment in the same order: tree,seg join to _trees.txt (seg = index in the "
+         "tree's line), section_id = its section_id column = the ids in _sections.bin. rad: the measured radius (power "
+         "mean) and its accuracy, from n_nodes points (from_ends: after a split); centroid: those points' centroid "
+         "before the centre step (for a root, the girth band's, above the base _trees.txt gives); reach: graph distance "
+         "to the farthest tip; split_*: the last of split_tests split tests at the section's top (clusters: end points "
+         "per cluster, before removing those too short for a tree)"
+      << std::endl;
+  ofs << "tree,seg,section_id,parent_seg,rad,accuracy,n_nodes,from_ends,centroid_x,centroid_y,centroid_z,reach,"
+         "radius_scale,split_tests,split_gap,split_span,split_ends,split_removed,split_clusters"
+      << std::endl;
+  ofs << std::setprecision(6);
+  for (const int sec : order)
+  {
+    const BranchSection &s = sections_[sec];
+    ofs << key(sec) << "," << (s.parent >= 0 ? sections_[s.parent].id : -1) << "," << s.measured_radius << ","
+        << s.accuracy << "," << s.n_nodes << "," << s.from_ends << ",";
+    pos(ofs, s.centroid);
+    ofs << "," << s.max_distance_to_end << "," << s.radius_scale << "," << s.split.tests << "," << s.split.gap << ","
+        << s.split.span << "," << s.split.ends << "," << s.split.removed << ",";
+    for (size_t k = 0; k < s.split.clusters.size(); k++)
+    {
+      ofs << (k ? " " : "") << s.split.clusters[k];
+    }
+    ofs << std::endl;
+  }
+
+  // per ray of the cloud, in cloud order: the section_id that owns it (calculateSectionIds), -1 for none
+  for (const int id : ray_section_ids_)
+  {
+    const int32_t v = id;
+    bin.write(reinterpret_cast<const char *>(&v), sizeof(v));
+  }
+
+  mfs << "# Per tip (childless section): the points the ownership assigns past its end points, i.e. the ends and "
+         "everything above them on the shortest-path graph. n_ends: of those, the tip's own end points; mean and cov "
+         "(population, m^2) of their positions; top_z: the highest; reach: graph distance from those end points to the "
+         "farthest tip"
+      << std::endl;
+  mfs << "tree,seg,section_id,n,n_ends,mean_x,mean_y,mean_z,cov_xx,cov_xy,cov_xz,cov_yy,cov_yz,cov_zz,top_z,reach"
+      << std::endl;
+  mfs << std::setprecision(6);
+  for (const int sec : order)
+  {
+    if (!sections_[sec].children.empty())
+    {
+      continue;
+    }
+    const Module &m = modules_[sec];
+    mfs << key(sec) << "," << m.n << "," << m.n_ends << ",";
+    if (m.n == 0)
+    {
+      mfs << "nan,nan,nan,nan,nan,nan,nan,nan,nan,nan," << m.reach << std::endl;
+      continue;
+    }
+    pos(mfs, m.mean);
+    mfs << "," << m.cov(0, 0) << "," << m.cov(0, 1) << "," << m.cov(0, 2) << "," << m.cov(1, 1) << "," << m.cov(1, 2)
+        << "," << m.cov(2, 2) << "," << std::fixed << std::setprecision(4) << m.top + offset[2] << std::defaultfloat
+        << std::setprecision(6) << "," << m.reach << std::endl;
+  }
+  return ofs.good() && bin.good() && mfs.good();
 }
 
 // save the structure to a text file
@@ -1468,36 +1660,6 @@ bool Trees::save(const std::string &filename, const Eigen::Vector3d &offset, boo
       }
     }
     ofs << std::endl;
-  }
-  const char *votes = std::getenv("RCT_VOTES");
-  if (votes && votes[0] == '1')  // diagnostics: per written segment, its radius vote and its tree's taper
-  {
-    std::ofstream vfs((filename + ".votes").c_str(), std::ios::out);
-    vfs << std::setprecision(6);
-    vfs << "tree,seg,measured_radius,accuracy,junction_weight,weight,n_nodes,from_ends,tree_taper,tree_weight,mean_taper,tree_height" << std::endl;
-    int tree = 0;
-    for (size_t sec = 0; sec < sections_.size(); sec++)
-    {
-      const auto &section = sections_[sec];
-      if (section.parent >= 0 || section.children.empty())
-      {
-        continue;
-      }
-      std::vector<int> list = {static_cast<int>(sec)};
-      for (size_t c = 0; c < list.size(); c++)
-      {
-        const BranchSection &node = sections_[list[c]];
-        vfs << tree << "," << c << "," << node.measured_radius << "," << node.accuracy << "," << node.junction_weight << ","
-            << node.weight << "," << node.n_nodes << "," << node.from_ends << ","
-            << section.total_taper / section.total_weight << "," << section.total_weight << "," << meanTaper(section) << ","
-            << section.tree_height << std::endl;
-        for (auto i : node.children)
-        {
-          list.push_back(i);
-        }
-      }
-      tree++;
-    }
   }
   return true;
 }
