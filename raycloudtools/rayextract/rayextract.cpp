@@ -115,7 +115,7 @@ int rayExtract(int argc, char *argv[])
     taper_prior_sd(0.0, 10.0), taper_exponent(-3.0, 3.0), taper_vote_cv(0.001, 10.0),
     radius_floor(0.0, 1.0), branch_vote_sd(0.0, 10.0), stem_taper(0.0, 3.0), trunk_gap(0.0, 10.0), trunk_span_ratio(0.0, 10.0);
   ray::IntArgument trunk_splits(0, 100), max_fan(0, 1000);
-  ray::DoubleArgument fan_min_length(0.001, 10.0), fan_height(0.0, 1000.0);
+  ray::DoubleArgument fan_min_length(0.001, 10.0);
   ray::OptionalKeyValueArgument gradient_option("gradient", 'g', &gradient);
   ray::OptionalFlagArgument exclude_rays("exclude_rays", 'e'), segment_branches("branch_segmentation", 'b'), stalks("stalks", 's'), use_rays("use_rays", 'u');
   ray::OptionalFlagArgument segmented("segmented", 'l');
@@ -157,7 +157,6 @@ int rayExtract(int argc, char *argv[])
   ray::OptionalKeyValueArgument trunk_splits_option("trunk_splits", 'N', &trunk_splits);
   ray::OptionalKeyValueArgument max_fan_option("max_fan", 'F', &max_fan);
   ray::OptionalKeyValueArgument fan_min_length_option("fan_min_length", 'M', &fan_min_length);
-  ray::OptionalKeyValueArgument fan_height_option("fan_height", 'H', &fan_height);
   ray::OptionalKeyValueArgument leaf_option("leaf", 'l', &leaf_file);
   ray::OptionalKeyValueArgument leaf_area_option("leaf_area", 'a', &leaf_area);
   ray::OptionalKeyValueArgument leaf_droop_option("leaf_droop", 'd', &leaf_droop);
@@ -180,7 +179,7 @@ int rayExtract(int argc, char *argv[])
       &segment_branches, &grid_width_option, &global_taper_option, &global_taper_factor_option, &taper_weight_option, &taper_prior_sd_option,
       &taper_exponent_option, &taper_vote_cv_option, &radius_floor_option,
       &branch_vote_sd_option, &stem_taper_option, &trunk_gap_option,
-      &trunk_span_ratio_option, &trunk_splits_option, &max_fan_option, &fan_min_length_option, &fan_height_option, &use_rays, &segmented,
+      &trunk_span_ratio_option, &trunk_splits_option, &max_fan_option, &fan_min_length_option, &use_rays, &segmented,
       &labels_only, &no_mesh, &graph_cache_option, &geometric_centre, &slab_sections, &verbose, &view_flag });
   bool extract_leaves = ray::parseCommandLine(argc, argv, { &leaves, &cloud_file, &trees_file }, { &leaf_option, &leaf_area_option, &leaf_droop_option, &stalks, &view_flag });
 
@@ -318,10 +317,6 @@ int rayExtract(int argc, char *argv[])
     if (fan_min_length_option.isSet())
     {
       params.fan_min_length = fan_min_length.value();
-    }
-    if (fan_height_option.isSet())
-    {
-      params.fan_height = fan_height.value();
     }   
     params.use_rays = use_rays.isSet();
     if (graph_cache_option.isSet())

@@ -45,7 +45,6 @@ struct RAYLIB_EXPORT TreesParams
                           // (down to fan_min_length) until they don't: a split happens where the wood parts, not
                           // a whole prior-sized cylinder above it (research v1-landing 23)
   double fan_min_length;  // m: the shortest section max_fan shortens to
-  double fan_height;      // m: if > 0, max_fan applies only to sections rooted this low above their tree's base
   bool use_rays; // use the full rays in order to estimate a smaller radius when points are not all on the real branch
   std::string graph_cache; // if set, load the shortest-path graph from this file, or compute it and save it there
   bool geometric_centre; // after the algebraic centre step, iterate a robust geometric circle fit with a radius prior
