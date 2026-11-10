@@ -200,7 +200,9 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     nodes.clear();
     sections_[sec_].ends.clear();
     extractNodesAndEndsFromRoots(nodes, base, children, 0.0, best_dist/2.0); // make it lower
-    estimateCylinderTaper(estimated_radius, best_accuracy, false); // update the expected taper
+    // the ring doesn't vote for the tree's taper: it is measured before the trunk's ends are clustered, so on a clump
+    // of stems it reads their envelope (research 25), and as the tree's heaviest vote (H^3) it set every section's
+    // length and span. The taper is learnt from the sections, each measured on its own share of the wood
     sections_[sec_].trunk_radius = estimated_radius;
     sections_[sec_].trunk_z = best_tip[2];
     sections_[sec_].measured_radius = estimated_radius;
@@ -466,8 +468,8 @@ double Trees::meanTaper(const BranchSection &section) const
   // the prior's weight: by default the running sum(w^2)/sum(w) over every taper vote so far in this run, which
   // couples each tree to the others in the cloud and to the processing order; a fixed taper_weight decouples them
   double mean_weight = params_->taper_weight > 0.0 ? params_->taper_weight : forest_weight_squared_ / forest_weight_;
-  double taper = sections_[root].total_taper / sections_[root].total_weight;
   double weight = sections_[root].total_weight;
+  double taper = weight > 0.0 ? sections_[root].total_taper / weight : 0.0;  // no votes yet: the prior alone
   double blend = params_->global_taper_factor * params_->global_taper_factor * params_->global_taper_factor;
   mean_weight *= blend;
   weight *= 1.0 - blend;
