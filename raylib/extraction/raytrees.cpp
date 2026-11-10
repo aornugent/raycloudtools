@@ -34,6 +34,8 @@ TreesParams::TreesParams()
   , trunk_gap(0.0)
   , trunk_span_ratio(0.0)
   , trunk_splits(2)
+  , max_fan(0)
+  , fan_min_length(0.1)
   , geometric_centre(false)
   , slab_sections(false)
 {}
@@ -258,6 +260,36 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
       double gap = params_->gap_ratio * sections_[sec_].max_distance_to_end; // gap threshold for splitting
       double span = params_->span_ratio * span_rad; // span thershold for splitting
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
+
+      // a fan: the section's ends part into more clusters than max_fan, all of which would hang from its root. The
+      // section is too long for where the wood parts, so halve it until they don't (or it is fan_min_length short)
+      if (params_->max_fan > 0 && (int)clusters.size() > params_->max_fan)
+      {
+        for (double t = 0.5 * thickness; t >= params_->fan_min_length; t *= 0.5)
+        {
+          std::vector<int> t_nodes;
+          sections_[sec_].ends.clear();
+          extractNodesAndEndsFromRoots(t_nodes, base, children, 0.0, t);
+          bool t_removed = false;
+          std::vector<std::vector<int>> t_clusters = findPointClusters(base, t_removed, t, span, gap);
+          if (t_clusters.empty())
+          {
+            break;
+          }
+          nodes.swap(t_nodes);
+          clusters.swap(t_clusters);
+          points_removed = t_removed;
+          thickness = t;
+          if ((int)clusters.size() <= params_->max_fan)
+          {
+            break;
+          }
+        }
+        // keep the section's ends consistent with the thickness chosen
+        sections_[sec_].ends.clear();
+        std::vector<int> t_nodes;
+        extractNodesAndEndsFromRoots(t_nodes, base, children, 0.0, thickness);
+      }
 
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)
       {
