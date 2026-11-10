@@ -200,9 +200,16 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     nodes.clear();
     sections_[sec_].ends.clear();
     extractNodesAndEndsFromRoots(nodes, base, children, 0.0, best_dist/2.0); // make it lower
-    // the ring doesn't vote for the tree's taper: it is measured before the trunk's ends are clustered, so on a clump
-    // of stems it reads their envelope (research 25), and as the tree's heaviest vote (H^3) it set every section's
-    // length and span. The taper is learnt from the sections, each measured on its own share of the wood
+    // the ring is measured before the trunk's ends are clustered, so on a clump of stems it reads their envelope
+    // (research 25), and as the tree's heaviest vote (H^3) it would set every section's length and span. An envelope
+    // only over-reads, so a ring wider than the prior's radius doesn't vote: the taper is then learnt from the
+    // sections, each measured on its own share of the wood
+    const double prior_taper = params_->global_taper ? params_->global_taper
+                                                     : (forest_weight_ > 0.0 ? forest_taper_ / forest_weight_ : 0.0);
+    if (prior_taper <= 0.0 || estimated_radius <= prior_taper * tree_height)
+    {
+      estimateCylinderTaper(estimated_radius, best_accuracy, false); // update the expected taper
+    }
     sections_[sec_].trunk_radius = estimated_radius;
     sections_[sec_].trunk_z = best_tip[2];
     sections_[sec_].measured_radius = estimated_radius;
