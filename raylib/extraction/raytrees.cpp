@@ -263,7 +263,22 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
 
       // a fan: the section's ends part into more clusters than max_fan, all of which would hang from its root. The
       // section is too long for where the wood parts, so halve it until they don't (or it is fan_min_length short)
-      if (params_->max_fan > 0 && (int)clusters.size() > params_->max_fan)
+      // (counting the clusters bifurcate would hang: those reaching beyond crop_length)
+      auto fan_of = [&](const std::vector<std::vector<int>> &cs, double len)
+      {
+        int n = 0;
+        for (auto &c : cs)
+        {
+          double d = 0.0;
+          for (auto &end : c)
+          {
+            d = std::max(d, points_[end].distance_to_end);
+          }
+          n += d + len > params_->crop_length ? 1 : 0;
+        }
+        return n;
+      };
+      if (params_->max_fan > 0 && fan_of(clusters, thickness) > params_->max_fan)
       {
         for (double t = 0.5 * thickness; t >= params_->fan_min_length; t *= 0.5)
         {
@@ -280,7 +295,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
           clusters.swap(t_clusters);
           points_removed = t_removed;
           thickness = t;
-          if ((int)clusters.size() <= params_->max_fan)
+          if (fan_of(clusters, thickness) <= params_->max_fan)
           {
             break;
           }
