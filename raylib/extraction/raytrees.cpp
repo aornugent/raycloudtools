@@ -36,6 +36,7 @@ TreesParams::TreesParams()
   , trunk_splits(2)
   , max_fan(0)
   , fan_min_length(0.1)
+  , fan_height(0.0)
   , geometric_centre(false)
   , slab_sections(false)
 {}
@@ -278,7 +279,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
         }
         return n;
       };
-      if (params_->max_fan > 0 && fan_of(clusters, thickness) > params_->max_fan)
+      const bool fan_low = params_->fan_height <= 0.0 || base[2] - sections_[sections_[sec_].root].tip[2] < params_->fan_height;
+      if (params_->max_fan > 0 && fan_low && fan_of(clusters, thickness) > params_->max_fan)
       {
         for (double t = 0.5 * thickness; t >= params_->fan_min_length; t *= 0.5)
         {
