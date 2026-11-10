@@ -41,10 +41,6 @@ struct RAYLIB_EXPORT TreesParams
   double trunk_gap;       // if > 0, the trunk split's gap (m) instead of gap_ratio x length, so stems split apart
   double trunk_span_ratio; // if > 0, the trunk split's span ratio instead of span_ratio (branches keep theirs)
   int trunk_splits;       // how many times one root group may split into trees (stems)
-  int max_fan;            // if > 0, a branch section whose ends split into more clusters than this is halved in length
-                          // (down to fan_min_length) until they don't: a split happens where the wood parts, not
-                          // a whole prior-sized cylinder above it (research v1-landing 23)
-  double fan_min_length;  // m: the shortest section max_fan shortens to
   bool use_rays; // use the full rays in order to estimate a smaller radius when points are not all on the real branch
   std::string graph_cache; // if set, load the shortest-path graph from this file, or compute it and save it there
   bool geometric_centre; // after the algebraic centre step, iterate a robust geometric circle fit with a radius prior
