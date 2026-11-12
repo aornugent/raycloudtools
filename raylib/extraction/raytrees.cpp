@@ -200,7 +200,15 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     nodes.clear();
     sections_[sec_].ends.clear();
     extractNodesAndEndsFromRoots(nodes, base, children, 0.0, best_dist/2.0); // make it lower
-    estimateCylinderTaper(estimated_radius, best_accuracy, false); // update the expected taper
+    // The ring is measured before the trunk's ends are clustered, so on a clump of stems it reads their envelope, and
+    // as the tree's heaviest vote it would set every section's length and span (and so the fans at the base). An
+    // envelope can only over-read, so a ring wider than the prior's radius doesn't vote; the taper is then learnt
+    // from the sections, each measured on its own share of the wood.
+    const double prior = priorTaper(sec_);
+    if (prior <= 0.0 || estimated_radius <= prior * sections_[sec_].tree_height)
+    {
+      estimateCylinderTaper(estimated_radius, best_accuracy, false); // update the expected taper
+    }
     sections_[sec_].trunk_radius = estimated_radius;
     sections_[sec_].trunk_z = best_tip[2];
     sections_[sec_].measured_radius = estimated_radius;
@@ -415,6 +423,15 @@ Trees::TaperBlend Trees::taperBlend(int root) const
   return b;
 }
 
+double Trees::priorTaper(int root) const
+{
+  if (params_->taper_prior_sd > 0.0)
+  {
+    return taperBlend(root).prior;
+  }
+  return params_->global_taper ? params_->global_taper : (forest_weight_ > 0.0 ? forest_taper_ / forest_weight_ : 0.0);
+}
+
 double Trees::meanTaper(const BranchSection &section) const
 {
   int root = section.root;
@@ -422,11 +439,13 @@ double Trees::meanTaper(const BranchSection &section) const
   {
     return taperBlend(root).result;
   }
-  double mean_taper = params_->global_taper ? params_->global_taper : (forest_taper_ / forest_weight_);
+  double mean_taper = priorTaper(root);
   // the prior's weight: by default the running sum(w^2)/sum(w) over every taper vote so far in this run, which
   // couples each tree to the others in the cloud and to the processing order; a fixed taper_weight decouples them
   double mean_weight = params_->taper_weight > 0.0 ? params_->taper_weight : forest_weight_squared_ / forest_weight_;
-  double taper = sections_[root].total_taper / sections_[root].total_weight;
+  // a tree with no votes yet (its ring left out as an envelope, no section measured) takes the prior
+  double taper = sections_[root].total_weight > 0.0 ? sections_[root].total_taper / sections_[root].total_weight
+                                                    : mean_taper;
   double weight = sections_[root].total_weight;
   double blend = params_->global_taper_factor * params_->global_taper_factor * params_->global_taper_factor;
   mean_weight *= blend;
