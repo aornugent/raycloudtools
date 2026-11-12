@@ -1389,7 +1389,10 @@ void Trees::segmentCloud(Cloud &cloud, std::vector<int> &root_segs, const std::v
       // This block places a cone of gradient 2 around the trunk direction, to remove the square of initial ground points
       // probe (round 4): no cone, so a stem's own points near the ground keep their tree (the cone, about the trunk
       // section's axis from its root centroid, also cut the stem's skin where the axis stood off the stem)
-      if (false && seg != -1 && sections_[seg].parent == -1)
+      // second version: the cone cuts only what lies within kGround of its ground root (the ground itself)
+      const double kGround = 0.08;
+      if (seg != -1 && sections_[seg].parent == -1 && root_id != -1 &&
+          cloud.ends[i][2] - points_[root_id].pos[2] < kGround)
       {
         Eigen::Vector3d dir(0,0,1e-10);
         for (auto &child : sections_[seg].children)
