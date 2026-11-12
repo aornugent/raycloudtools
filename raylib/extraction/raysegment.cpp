@@ -121,7 +121,9 @@ void connectPointsShortestPath(
         const double d = std::max(0.001, dif.dot(dir));
         // we are looking for a minimum score, so large distances are bad, but new points in line with the
         // path direction are good
-        double score = dist2 / (d * d);
+        // probe (3dtrees research 27): a path's cost grows with its length, not its squared hops, so it doesn't snake
+        // through dense foliage (n hops of length l cost n l^2 = L l: a dense winding route is cheaper than straight wood)
+        double score = dist / (d * d);
 
         if (gravity_factor > 0.0)  // penalise paths that are hard to hold up against gravity (lateral direction)
         {
