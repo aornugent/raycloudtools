@@ -606,6 +606,118 @@ void Trees::extractNodesAndEndsFromRoots(std::vector<int> &nodes, const Eigen::V
 }
 
 // find clusters of points from the root points up the shortest paths, up to the cylinder length
+// The algebraic (Kasa) circle through 2D points: its centre, radius and the rms of |q - c| - r. False if degenerate.
+static bool fitCircle(const std::vector<Eigen::Vector2d> &qs, Eigen::Vector2d &centre, double &radius, double &rms)
+{
+  Eigen::Matrix3d A = Eigen::Matrix3d::Zero();
+  Eigen::Vector3d b = Eigen::Vector3d::Zero();
+  for (const auto &q : qs)
+  {
+    const Eigen::Vector3d row(q[0], q[1], 1.0);
+    A += row * row.transpose();
+    b += row * -q.squaredNorm();
+  }
+  const Eigen::Vector3d x = A.ldlt().solve(b);  // q.q + D x + E y + F = 0
+  centre = Eigen::Vector2d(-x[0] / 2.0, -x[1] / 2.0);
+  const double r2 = centre.squaredNorm() - x[2];
+  if (!x.allFinite() || r2 <= 0.0)
+  {
+    return false;
+  }
+  radius = std::sqrt(r2);
+  double sum = 0.0;
+  for (const auto &q : qs)
+  {
+    sum += ((q - centre).norm() - radius) * ((q - centre).norm() - radius);
+  }
+  rms = std::sqrt(sum / static_cast<double>(qs.size()));
+  return true;
+}
+
+// Split `cluster` (ids into ps) into two lobes when its points, seen along `axis`, are two stems side by side (a
+// figure 8) rather than one: two circles, one per half of a 2-means split, fit them with under half the residual of
+// one circle, each smaller than the one, side by side rather than overlapping. A ring or a one-sided arc of a single
+// stem fits one circle, so it stays whole. The second lobe goes to `other`.
+static bool splitLobes(const std::vector<Eigen::Vector3d> &ps, const Eigen::Vector3d &axis, std::vector<int> &cluster,
+                       std::vector<int> &other)
+{
+  const size_t min_lobe = 4;           // points: a circle needs a few beyond its three
+  const double residual_gain = 0.5;    // two circles must fit with under half one circle's residual
+  const double side_by_side = 0.8;     // their centres over 0.8 x the sum of their radii apart
+  if (cluster.size() < 2 * min_lobe)
+  {
+    return false;
+  }
+  const Eigen::Vector3d u = axis.unitOrthogonal(), v = axis.cross(u);
+  std::vector<Eigen::Vector2d> qs;
+  for (int i : cluster)
+  {
+    qs.emplace_back(ps[i].dot(u), ps[i].dot(v));
+  }
+  Eigen::Vector2d c1, cs[2];
+  double r1, rms1, rs[2], rmss[2];
+  if (!fitCircle(qs, c1, r1, rms1))
+  {
+    return false;
+  }
+  // 2-means, seeded with the two points farthest apart
+  size_t a = 0, b = 0;
+  for (size_t i = 0; i < qs.size(); i++)
+  {
+    if ((qs[i] - qs[0]).norm() > (qs[a] - qs[0]).norm()) a = i;
+  }
+  for (size_t i = 0; i < qs.size(); i++)
+  {
+    if ((qs[i] - qs[a]).norm() > (qs[b] - qs[a]).norm()) b = i;
+  }
+  Eigen::Vector2d m[2] = {qs[a], qs[b]};
+  std::vector<int> side(qs.size(), 0);
+  for (int it = 0; it < 10; it++)
+  {
+    Eigen::Vector2d sum[2] = {Eigen::Vector2d::Zero(), Eigen::Vector2d::Zero()};
+    int n[2] = {0, 0};
+    for (size_t i = 0; i < qs.size(); i++)
+    {
+      side[i] = (qs[i] - m[1]).norm() < (qs[i] - m[0]).norm();
+      sum[side[i]] += qs[i];
+      n[side[i]]++;
+    }
+    if (n[0] == 0 || n[1] == 0)
+    {
+      return false;
+    }
+    m[0] = sum[0] / n[0];
+    m[1] = sum[1] / n[1];
+  }
+  std::vector<Eigen::Vector2d> lobe[2];
+  for (size_t i = 0; i < qs.size(); i++)
+  {
+    lobe[side[i]].push_back(qs[i]);
+  }
+  for (int k = 0; k < 2; k++)
+  {
+    if (lobe[k].size() < min_lobe || !fitCircle(lobe[k], cs[k], rs[k], rmss[k]) || rs[k] >= r1)
+    {
+      return false;
+    }
+  }
+  const double rms2 = std::sqrt((rmss[0] * rmss[0] * static_cast<double>(lobe[0].size()) +
+                                 rmss[1] * rmss[1] * static_cast<double>(lobe[1].size())) /
+                                static_cast<double>(qs.size()));
+  if (rms2 >= residual_gain * rms1 || (cs[0] - cs[1]).norm() <= side_by_side * (rs[0] + rs[1]))
+  {
+    return false;
+  }
+  std::vector<int> keep;
+  other.clear();
+  for (size_t i = 0; i < qs.size(); i++)
+  {
+    (side[i] ? other : keep).push_back(cluster[i]);
+  }
+  cluster = keep;
+  return true;
+}
+
 std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &base, bool &points_removed,
                               double thickness, double span, double gap)
 {
@@ -635,6 +747,17 @@ std::vector<std::vector<int>> Trees::findPointClusters(const Eigen::Vector3d &ba
   // cluster these end points based on two separation criteria (gap_ratio and span_ratio)
   std::vector<std::vector<int>> clusters;
   generateClusters(clusters, ps, gap, span);
+  // a cluster can still hold two stems side by side (a figure 8): touching stems link within the gap, and the span is
+  // set by the prior radius of both together. Split it where two circles fit its points much better than one
+  const Eigen::Vector3d axis = par == -1 || ps.empty() ? Eigen::Vector3d(0, 0, 1) : (mean(ps) - base).normalized();
+  for (size_t c = 0; c < clusters.size(); c++)
+  {
+    std::vector<int> other;
+    if (splitLobes(ps, axis, clusters[c], other))
+    {
+      clusters.push_back(other);
+    }
+  }
   BranchSection::SplitTest &test = sections_[sec_].split;  // record the test, for diagnostics (export_sections)
   test.tests++;
   test.gap = gap;
