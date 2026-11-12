@@ -183,6 +183,7 @@ struct RAYLIB_EXPORT BranchSection
   int split_count;
   double tree_height;
   std::vector<int> roots;  // root points
+  std::vector<int> all_roots;  // a trunk's root points before a trunk split clipped them (probe: their points' labels)
   std::vector<int> ends;
   std::vector<int> children;
   std::vector<int> slab;  // after a split: this section's share of the slab of points (slab_sections)

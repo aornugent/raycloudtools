@@ -503,6 +503,7 @@ void Trees::generateRootSections(const std::vector<std::vector<int>> &roots_list
   {
     BranchSection base;
     base.roots = roots_list[i];
+    base.all_roots = roots_list[i];
     base.root = static_cast<int>(sections_.size());
     base.radius_scale = 1.0;
     sections_.push_back(base);
@@ -1213,6 +1214,19 @@ void Trees::addChildSection()
 // calculate what section every point belongs to
 void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector<std::vector<int>> &children)
 {
+  // probe (round 4): a trunk split clips a trunk's roots to those its kept ends' paths reach, so the points whose
+  // own paths drop straight to the other roots of its cell (most of a stem's points near the ground) got no tree.
+  // Give every original root its trunk first; the clipped roots (and an offshoot trunk's) then label as before.
+  for (size_t i = 0; i < sections_.size(); i++)
+  {
+    if (sections_[i].parent == -1 && sections_[i].total_weight > 1e-9)
+    {
+      for (auto &root : sections_[i].all_roots)
+      {
+        section_ids[root] = static_cast<int>(i);
+      }
+    }
+  }
   // first we initialise to one branch section per root
   for (size_t i = 0; i < sections_.size(); i++)
   {
