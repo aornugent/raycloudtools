@@ -402,13 +402,21 @@ std::vector<std::vector<int>> getRootsAndSegment(std::vector<Vertex> &points, co
     {
       // probe (3dtrees research 27): the one-way graph decides which ground seed (so which tree) owns each point,
       // as before; the symmetric graph then routes each point's path, never across seeds
-      const std::vector<Vertex> points0 = points;
       auto queue0 = closest_node;
       connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, nullptr, false);
       std::vector<int> seed(points.size());
       for (size_t i = 0; i < points.size(); i++)
         seed[i] = points[i].root;
-      points = points0;
+      for (size_t i = 0; i < points.size(); i++)  // back to the seeded start, in place (no copy: memory)
+      {
+        Vertex &v = points[i];
+        const bool is_seed = seed[i] == static_cast<int>(i);
+        v.parent = -1;
+        v.root = is_seed ? static_cast<int>(i) : -1;
+        v.distance_to_ground = is_seed ? 0.0 : std::numeric_limits<double>::max();
+        v.score = is_seed ? 0.0 : std::numeric_limits<double>::max();
+        v.visited = false;
+      }
       closest_node = queue0;
       connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, &seed, true);
     }
