@@ -102,6 +102,7 @@ private:
   /// find separate clusters of points within the branch section
   std::vector<std::vector<int>> findPointClusters(const Eigen::Vector3d &base, bool &points_removed,
                                                   double thickness, double span, double gap);
+  bool reachesGround(const std::vector<int> &ends, const std::vector<int> &wood) const;
   /// split the branch section to one branch for each cluster
   void bifurcate(const std::vector<std::vector<int>> &clusters, double thickness, std::vector<std::vector<int>> &children, bool clip_tree, bool add_offshoots,
                  const std::vector<int> *slab = nullptr, double prior_radius = 0.0);

@@ -729,6 +729,27 @@ std::vector<std::vector<int>> Trees::partitionSlab(const std::vector<std::vector
   return shares;
 }
 
+// whether any path down from `ends` reaches the current section's roots before meeting `wood` (another tree's nodes)
+bool Trees::reachesGround(const std::vector<int> &ends, const std::vector<int> &wood) const
+{
+  const std::vector<int> &roots = sections_[sec_].roots;
+  for (int end : ends)
+  {
+    for (int node = points_[end].parent; node != -1; node = points_[node].parent)
+    {
+      if (std::find(wood.begin(), wood.end(), node) != wood.end())
+      {
+        break;
+      }
+      if (std::find(roots.begin(), roots.end(), node) != roots.end())
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thickness, std::vector<std::vector<int>> &children, bool clip_tree, bool add_offshoots,
                       const std::vector<int> *slab, double prior_radius)
 {
@@ -824,6 +845,12 @@ void Trees::bifurcate(const std::vector<std::vector<int>> &clusters, double thic
           new_node.slab = shares[i];
         }
 
+        if (clip_tree && !reachesGround(clusters[i], all_nodes))
+        {
+          // every path down from this cluster meets the main tree's wood before the ground: it is a branch of that
+          // tree, not a tree of its own. Left uncut, it stays among the trunk's ends and becomes a child section
+          continue;
+        }
         if (clip_tree)
         {
           std::vector<int> my_nodes;
