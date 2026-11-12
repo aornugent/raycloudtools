@@ -122,6 +122,9 @@ void connectPointsShortestPath(
         // we are looking for a minimum score, so large distances are bad, but new points in line with the
         // path direction are good
         double score = dist2 / (d * d);
+        // probe (3dtrees research 27): a level hop costs 3x a vertical one, so a crown point is reached up its own
+        // branch rather than sideways through the canopy's continuous foliage (125's hoop: a 20 m route on a 7 m tree)
+        score *= 1.0 + 2.0 * (dif[0] * dif[0] + dif[1] * dif[1]);
 
         if (gravity_factor > 0.0)  // penalise paths that are hard to hold up against gravity (lateral direction)
         {
