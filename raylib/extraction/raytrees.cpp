@@ -261,8 +261,11 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     if (!extract_from_ends)
     {
       Eigen::Vector3d base = getRootPosition();
-      double span_rad = radius(sections_[sec_]); 
-      double thickness = params_->cylinder_length_to_width * span_rad;
+      double span_rad = radius(sections_[sec_]);
+      // at cylinder_length_to_width x the prior radius a crown section is 2-5 cm: a few points along one shortest path,
+      // so its centroid follows the path's zigzag rather than the branch. A floor keeps sections long enough to average
+      const double min_section_length = 0.1;  // m
+      double thickness = std::max(params_->cylinder_length_to_width * span_rad, min_section_length);
       extractNodesAndEndsFromRoots(nodes, base, children, 0.0, thickness);
       
       bool points_removed = false;
