@@ -1297,44 +1297,6 @@ void Trees::calculateSectionIds(std::vector<int> &section_ids, const std::vector
       }
     }
   }
-
-  // probe (round 4): a stem's lowest points can drop to ground vertices in a root cell that made no tree (its own
-  // paths too short), so no chain reaches a labelled point. Near the ground (path to it under kLow), such a point
-  // takes the label of the nearest labelled near-ground point within kNear; twice, so a stem's skin fills inwards.
-  const double kLow = 0.6, kNear = 0.05;
-  for (int pass = 0; pass < 2; pass++)
-  {
-    std::vector<int> have, want;
-    for (size_t i = 0; i < points_.size(); i++)
-    {
-      if (points_[i].distance_to_ground > kLow)
-        continue;
-      (section_ids[i] == -1 ? want : have).push_back(static_cast<int>(i));
-    }
-    if (have.empty() || want.empty())
-      break;
-    Eigen::MatrixXd ref(3, have.size()), qry(3, want.size());
-    for (size_t k = 0; k < have.size(); k++)
-      ref.col(k) = points_[have[k]].pos;
-    for (size_t k = 0; k < want.size(); k++)
-      qry.col(k) = points_[want[k]].pos;
-    Nabo::NNSearchD *nns = Nabo::NNSearchD::createKDTreeLinearHeap(ref, 3);
-    Eigen::MatrixXi idx(1, want.size());
-    Eigen::MatrixXd d2(1, want.size());
-    nns->knn(qry, idx, d2, 1, 0.0, Nabo::NNSearchD::ALLOW_SELF_MATCH, kNear);
-    delete nns;
-    std::vector<int> found(want.size(), -1);
-    for (size_t k = 0; k < want.size(); k++)
-    {
-      if (idx(0, k) != Nabo::NNSearchD::InvalidIndex && std::isfinite(d2(0, k)))
-        found[k] = section_ids[have[idx(0, k)]];
-    }
-    for (size_t k = 0; k < want.size(); k++)
-    {
-      if (found[k] != -1)
-        section_ids[want[k]] = found[k];
-    }
-  }
 }
 
 // generate local parent links. These are parent indices that are
