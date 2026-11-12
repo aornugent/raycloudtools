@@ -122,6 +122,9 @@ void connectPointsShortestPath(
         // we are looking for a minimum score, so large distances are bad, but new points in line with the
         // path direction are good
         double score = dist2 / (d * d);
+        // probe (3dtrees research 27): a downward hop costs up to 9x, so a crown lobe is reached from below if any route
+        // there is, not over the canopy top and down (858's hairpin, 125's hoop)
+        score *= 1.0 + 8.0 * std::max(0.0, -dif[2]);
 
         if (gravity_factor > 0.0)  // penalise paths that are hard to hold up against gravity (lateral direction)
         {
