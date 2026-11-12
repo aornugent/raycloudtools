@@ -134,6 +134,7 @@ private:
                             const std::vector<int> &root_segs);
   /// estimate the mean taper for the specified section
   double meanTaper(const BranchSection &section) const;
+  double priorTaper(int root) const;  // the prior taper alone, before any vote
   /// the per-tree taper blend's parts: prior mean, the tree's own mean vote, data share and result
   struct TaperBlend { double prior, data, data_var, data_share, result; };
   TaperBlend taperBlend(int root) const;
