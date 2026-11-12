@@ -118,7 +118,9 @@ void connectPointsShortestPath(
             dir = (points[node.id].pos - points[ppar].pos).normalized();
           }
         }
-        const double d = std::max(0.001, dif.dot(dir));
+        // probe (3dtrees research 27): a turn of over 60 deg costs at most 4x, not up to 10^6x, so a path that must
+        // turn back doesn't arc round a loop to do it
+        const double d = std::max(0.5, dif.dot(dir));
         // we are looking for a minimum score, so large distances are bad, but new points in line with the
         // path direction are good
         double score = dist2 / (d * d);
