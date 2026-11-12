@@ -79,6 +79,24 @@ void connectPointsShortestPath(
     indices.middleCols(start, n) = chunk_indices;
   }
 
+  // probe (3dtrees research 27): the neighbour graph made symmetric. A point's edges are its 20 nearest neighbours,
+  // so a dense foliage point never links to a sparse wood point beside it (its 20 are all foliage): paths enter dense
+  // canopy and can't drop back into sparse wood, so they cross the canopy to reach it (125's hoop, 858's hairpin).
+  // Each point also gets the points that have it among theirs.
+  std::vector<int> roff(points.size() + 1, 0), rev;
+  for (Eigen::Index j = 0; j < indices.cols(); j++)
+    for (int i = 0; i < search_size && indices(i, j) != Nabo::NNSearchD::InvalidIndex; i++)
+      roff[indices(i, j) + 1]++;
+  for (size_t j = 0; j < points.size(); j++)
+    roff[j + 1] += roff[j];
+  rev.resize(roff.back());
+  {
+    std::vector<int> fill(roff.begin(), roff.end() - 1);
+    for (Eigen::Index j = 0; j < indices.cols(); j++)
+      for (int i = 0; i < search_size && indices(i, j) != Nabo::NNSearchD::InvalidIndex; i++)
+        rev[fill[indices(i, j)]++] = static_cast<int>(j);
+  }
+
   // 2. climb up from lowest points, this part is based on Djikstra's algorithm
   while (!closest_node.empty())
   {
@@ -87,9 +105,13 @@ void connectPointsShortestPath(
     if (!points[node.id].visited)
     {
       // for each unvisited point, look at its nearest neighbours
-      for (int i = 0; i < search_size && indices(i, node.id) != Nabo::NNSearchD::InvalidIndex; i++)
+      int nk = 0;
+      while (nk < search_size && indices(nk, node.id) != Nabo::NNSearchD::InvalidIndex)
+        nk++;
+      const int nr = roff[node.id + 1] - roff[node.id];
+      for (int i = 0; i < nk + nr; i++)
       {
-        const int child = indices(i, node.id);
+        const int child = i < nk ? indices(i, node.id) : rev[roff[node.id] + i - nk];
         if (path_labels)
         {
           // paths are not allowed to cross from one labelled tree into another
