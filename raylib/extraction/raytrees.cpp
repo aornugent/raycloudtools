@@ -172,6 +172,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
                                             : params_->gap_ratio * sections_[sec_].max_distance_to_end;
       double span = (params_->trunk_span_ratio > 0.0 ? params_->trunk_span_ratio : params_->span_ratio) * estimated_radius;
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
+      sections_[sec_].trace_thickness = thickness;
+      sections_[sec_].trace_clusters = (int)clusters.size();
 
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)
       {
@@ -249,6 +251,7 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     if (sections_[sec_].max_distance_to_end < params_->crop_length)
     {
       setBranchTip();
+      sections_[sec_].trace_kind = 2;
       continue;
     }
 
@@ -267,6 +270,8 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
       double gap = params_->gap_ratio * sections_[sec_].max_distance_to_end; // gap threshold for splitting
       double span = params_->span_ratio * span_rad; // span thershold for splitting
       std::vector<std::vector<int>> clusters = findPointClusters(base, points_removed, thickness, span, gap);
+      sections_[sec_].trace_thickness = thickness;
+      sections_[sec_].trace_clusters = (int)clusters.size();
 
       if (clusters.size() > 1 || (points_removed && clusters.size() > 0))  // a bifurcation (or an alteration)
       {
@@ -290,10 +295,17 @@ Trees::Trees(Cloud &cloud, const Eigen::Vector3d &offset, const Mesh &mesh, cons
     }
     // estimate the section's tip (the centre of the cylinder of points)
     sections_[sec_].tip = calculateTipFromVertices(nodes);
+    sections_[sec_].trace_centroid = sections_[sec_].tip;
+    sections_[sec_].trace_kind = 1;
+    if (std::getenv("RCT_TRACE") && std::getenv("RCT_TRACE")[0] == '1')
+    {
+      sections_[sec_].trace_nodes = nodes;
+    }
     // get section's direction
     Eigen::Vector3d dir = par >= 0 ? (sections_[sec_].tip - sections_[par].tip).normalized() : Eigen::Vector3d(0, 0, 1);
     // shift to cylinder's centre
     sections_[sec_].tip += vectorToCylinderCentre(nodes, dir, radius(sections_[sec_]));
+    sections_[sec_].trace_shift = sections_[sec_].tip - sections_[sec_].trace_centroid;
     // re-estimate direction
     dir = par >= 0 ? (sections_[sec_].tip - sections_[par].tip).normalized() : Eigen::Vector3d(0, 0, 1);
     // now find the segment radius
@@ -1500,6 +1512,45 @@ bool Trees::save(const std::string &filename, const Eigen::Vector3d &offset, boo
             << node.weight << "," << node.n_nodes << "," << node.from_ends << ","
             << section.total_taper / section.total_weight << "," << section.total_weight << "," << meanTaper(section) << ","
             << section.tree_height << std::endl;
+        for (auto i : node.children)
+        {
+          list.push_back(i);
+        }
+      }
+      tree++;
+    }
+  }
+  const char *trace = std::getenv("RCT_TRACE");
+  if (trace && trace[0] == '1')  // diagnostics: per written segment, how it was made, and the points it was fitted on
+  {
+    std::ofstream tfs((filename + ".trace").c_str(), std::ios::out);
+    std::ofstream nfs((filename + ".nodes").c_str(), std::ios::out | std::ios::binary);
+    tfs << std::setprecision(6) << std::fixed;
+    tfs << "tree,seg,kind,cx,cy,cz,sx,sy,sz,thickness,clusters,max_d2e,radius,n_nodes,from_ends" << std::endl;
+    int tree = 0;
+    for (size_t sec = 0; sec < sections_.size(); sec++)
+    {
+      const auto &section = sections_[sec];
+      if (section.parent >= 0 || section.children.empty())
+      {
+        continue;
+      }
+      std::vector<int> list = {static_cast<int>(sec)};
+      for (size_t c = 0; c < list.size(); c++)
+      {
+        const BranchSection &node = sections_[list[c]];
+        const Eigen::Vector3d cen = node.trace_centroid + offset;
+        tfs << tree << "," << c << "," << node.trace_kind << "," << cen[0] << "," << cen[1] << "," << cen[2] << ","
+            << node.trace_shift[0] << "," << node.trace_shift[1] << "," << node.trace_shift[2] << ","
+            << node.trace_thickness << "," << node.trace_clusters << "," << node.max_distance_to_end << ","
+            << radius(node) << "," << node.n_nodes << "," << node.from_ends << std::endl;
+        for (auto i : node.trace_nodes)
+        {
+          const int32_t ids[2] = {tree, static_cast<int32_t>(c)};
+          const Eigen::Vector3d p = points_[i].pos + offset;
+          nfs.write(reinterpret_cast<const char *>(ids), sizeof(ids));
+          nfs.write(reinterpret_cast<const char *>(p.data()), 3 * sizeof(double));
+        }
         for (auto i : node.children)
         {
           list.push_back(i);

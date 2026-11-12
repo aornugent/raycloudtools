@@ -189,6 +189,12 @@ struct RAYLIB_EXPORT BranchSection
   double measured_radius{0};  // the radius vote's measured radius, for diagnostics
   int n_nodes{0};  // points the section was fitted on, for diagnostics
   int from_ends{0};  // 1 if fitted after a split
+  // RCT_TRACE diagnostics: the nodes' centroid before the centre shift, the shift, the section length, the clusters its
+  // ends parted into, the kind (0 root, 1 fitted, 2 cropped tip) and the points it was fitted on
+  Eigen::Vector3d trace_centroid{0, 0, 0}, trace_shift{0, 0, 0};
+  double trace_thickness{0};
+  int trace_clusters{0}, trace_kind{0};
+  std::vector<int> trace_nodes;
 };
 
 /// Converts an index in to a unique colour
