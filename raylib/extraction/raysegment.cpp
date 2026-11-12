@@ -53,7 +53,7 @@ public:
 void connectPointsShortestPath(
   std::vector<Vertex> &points,
   std::priority_queue<QueueNode, std::vector<QueueNode>, QueueNodeComparator> &closest_node, double distance_limit,
-  double gravity_factor, std::vector<int> *path_labels)
+  double gravity_factor, std::vector<int> *path_labels, bool symmetric = true)
 {
   // 1. get nearest neighbours
   const int search_size = std::min(20, static_cast<int>(points.size()) - 1);
@@ -108,7 +108,7 @@ void connectPointsShortestPath(
       int nk = 0;
       while (nk < search_size && indices(nk, node.id) != Nabo::NNSearchD::InvalidIndex)
         nk++;
-      const int nr = roff[node.id + 1] - roff[node.id];
+      const int nr = symmetric ? roff[node.id + 1] - roff[node.id] : 0;
       for (int i = 0; i < nk + nr; i++)
       {
         const int child = i < nk ? indices(i, node.id) : rev[roff[node.id] + i - nk];
@@ -394,7 +394,24 @@ std::vector<std::vector<int>> getRootsAndSegment(std::vector<Vertex> &points, co
   }
   else
   {
-    connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, labels_out);
+    if (labels_out)
+    {
+      connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, labels_out);
+    }
+    else
+    {
+      // probe (3dtrees research 27): the one-way graph decides which ground seed (so which tree) owns each point,
+      // as before; the symmetric graph then routes each point's path, never across seeds
+      const std::vector<Vertex> points0 = points;
+      auto queue0 = closest_node;
+      connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, nullptr, false);
+      std::vector<int> seed(points.size());
+      for (size_t i = 0; i < points.size(); i++)
+        seed[i] = points[i].root;
+      points = points0;
+      closest_node = queue0;
+      connectPointsShortestPath(points, closest_node, distance_limit, gravity_factor, &seed, true);
+    }
     if (!graph_cache.empty())
     {
       saveGraph(graph_cache, points, labels_out);
