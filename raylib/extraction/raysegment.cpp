@@ -79,6 +79,35 @@ void connectPointsShortestPath(
     indices.middleCols(start, n) = chunk_indices;
   }
 
+  // Each point's neighbours also include the points that have it among their nearest neighbours (reverse
+  // edges). On their own, the k nearest neighbours of a point on a densely sampled surface all lie on that
+  // surface, so two dense surfaces a few cm apart (touching stems, a crotch) get no edge between them and a
+  // path must reach one of them the long way round, through a sparse point that happens to see it. Reverse
+  // edges make reachability independent of which side is the denser.
+  std::vector<int> reverse_start(points.size() + 1, 0);
+  for (Eigen::Index j = 0; j < indices.cols(); j++)
+  {
+    for (int i = 0; i < search_size && indices(i, j) != Nabo::NNSearchD::InvalidIndex; i++)
+    {
+      reverse_start[indices(i, j) + 1]++;
+    }
+  }
+  for (size_t j = 0; j < points.size(); j++)
+  {
+    reverse_start[j + 1] += reverse_start[j];
+  }
+  std::vector<int> reverse(reverse_start.back());
+  {
+    std::vector<int> fill(reverse_start.begin(), reverse_start.end() - 1);
+    for (Eigen::Index j = 0; j < indices.cols(); j++)
+    {
+      for (int i = 0; i < search_size && indices(i, j) != Nabo::NNSearchD::InvalidIndex; i++)
+      {
+        reverse[fill[indices(i, j)]++] = static_cast<int>(j);
+      }
+    }
+  }
+
   // 2. climb up from lowest points, this part is based on Djikstra's algorithm
   while (!closest_node.empty())
   {
@@ -86,10 +115,16 @@ void connectPointsShortestPath(
     closest_node.pop();
     if (!points[node.id].visited)
     {
-      // for each unvisited point, look at its nearest neighbours
-      for (int i = 0; i < search_size && indices(i, node.id) != Nabo::NNSearchD::InvalidIndex; i++)
+      // for each unvisited point, look at its nearest neighbours, then at the points it is a nearest neighbour of
+      int num_nearest = 0;
+      while (num_nearest < search_size && indices(num_nearest, node.id) != Nabo::NNSearchD::InvalidIndex)
       {
-        const int child = indices(i, node.id);
+        num_nearest++;
+      }
+      const int num_neighbours = num_nearest + reverse_start[node.id + 1] - reverse_start[node.id];
+      for (int i = 0; i < num_neighbours; i++)
+      {
+        const int child = i < num_nearest ? indices(i, node.id) : reverse[reverse_start[node.id] + i - num_nearest];
         if (path_labels)
         {
           // paths are not allowed to cross from one labelled tree into another
